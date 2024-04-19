@@ -11,6 +11,12 @@ def cityscapes_classes():
         'bicycle'
     ]
 
+def phenobench_classes():
+    " Phenobench class named for external use"
+
+    return [
+        'background', 'crop', 'weed', 'partial-crop', 'partial-weed'
+    ]
 
 def ade_classes():
     """ADE20K class names for external use."""
