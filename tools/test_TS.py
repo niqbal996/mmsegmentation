@@ -82,14 +82,14 @@ def visualize_entropy_results(model, sorted_list, input_shape, n=5, num_classes=
     
     all_images = []
     for category, images in [("Highest", highest_entropy), ("Lowest", lowest_entropy)]:
-        for idx, (img_path, entropy_val) in enumerate(images):
-            all_images.append((category, idx, img_path, entropy_val))
-    
+        for idx, (img_path, entropy_val, confidence, weed_confidence) in enumerate(images):
+            all_images.append((category, idx, img_path, entropy_val, confidence, weed_confidence))
+
     current_idx = [0]  # Use list to make it mutable in nested function
     
     def show_current_image():
-        category, idx_in_category, img_path, entropy_val = all_images[current_idx[0]]
-        
+        category, idx_in_category, img_path, entropy_val, confidence, weed_confidence = all_images[current_idx[0]]
+
         # Load and process image
         img = cv2.imread(img_path)
         rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -108,52 +108,30 @@ def visualize_entropy_results(model, sorted_list, input_shape, n=5, num_classes=
         # Clear and recreate the plot
         plt.clf()
         fig = plt.gcf()
-        fig.set_size_inches(15, 10)
+        fig.set_size_inches(12, 6)
         
-        # Create subplots
-        gs = fig.add_gridspec(2, 3, hspace=0.3, wspace=0.2)
-        
+        # Create subplots - just 1 row, 2 columns
         fig.suptitle(f"{category} Entropy Image {idx_in_category+1} ({current_idx[0]+1}/{len(all_images)})\n"
-                    f"Entropy: {entropy_val:.4f} | File: {os.path.basename(img_path)}\n"
-                    f"Press 'n'/→ for next, 'p'/← for previous, 'q'/ESC to quit", 
+                    f"Entropy: {entropy_val:.4f} | Crop Confidence: {confidence:.4f} | Weed Confidence: {weed_confidence:.4f}",
                     fontsize=14, fontweight='bold')
         
         # Original image
-        ax1 = fig.add_subplot(gs[0, 0])
+        ax1 = plt.subplot(1, 2, 1)
         ax1.imshow(rgb_img)
         ax1.set_title("Original Image")
         ax1.axis('off')
         
-        # Overall segmentation
+        # Segmentation map only
         palette = np.array([[0, 0, 0], [0, 255, 0], [255, 0, 0]], dtype=np.uint8)
         color_seg = palette[seg_map]
-        overlay = cv2.addWeighted(rgb_img, 0.6, color_seg, 0.4, 0)
-        ax2 = fig.add_subplot(gs[0, 1])
-        ax2.imshow(overlay)
-        ax2.set_title("Segmentation Overlay")
+        ax2 = plt.subplot(1, 2, 2)
+        ax2.imshow(color_seg)
+        ax2.set_title("Segmentation Map")
         ax2.axis('off')
-        
-        # Segmentation map only
-        ax3 = fig.add_subplot(gs[0, 2])
-        ax3.imshow(color_seg)
-        ax3.set_title("Segmentation Map")
-        ax3.axis('off')
-        
-        # Individual class masks
-        for class_idx in range(num_classes):
-            ax = fig.add_subplot(gs[1, class_idx])
-            
-            # Create colored mask overlay
-            mask_colored = np.zeros_like(rgb_img)
-            mask_colored[seg_map == class_idx] = palette[class_idx]
-            mask_overlay = cv2.addWeighted(rgb_img, 0.7, mask_colored, 0.3, 0)
-            
-            ax.imshow(mask_overlay)
-            ax.set_title(f"{class_names[class_idx]} Mask")
-            ax.axis('off')
         
         # Save the visualization
         save_path = f"{category.lower()}_entropy_{idx_in_category+1}_entropy_{entropy_val:.4f}.png"
+        save_path = os.path.join('cam_output/GN1920', save_path)
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Saved visualization: {save_path}")
         
@@ -173,7 +151,7 @@ def visualize_entropy_results(model, sorted_list, input_shape, n=5, num_classes=
     
     # Create figure and set up
     plt.ion()  # Turn on interactive mode
-    fig, _ = plt.subplots(figsize=(15, 10))
+    fig, _ = plt.subplots(figsize=(12, 6))
     
     # Connect the key press event
     cid = fig.canvas.mpl_connect('key_press_event', on_key)
@@ -279,7 +257,6 @@ def entropy_image_avg(pred):
     out = cv2.applyColorMap(c, cv2.COLORMAP_JET)
     return out, torch.sum(b).cpu().numpy()/(b.size(0)*b.size(1))
 
-
 def compute_image_entropy(prob_map):
     """
     Compute the image-level entropy from per-pixel probability maps.
@@ -296,7 +273,6 @@ def compute_image_entropy(prob_map):
     avg_entropy = torch.mean(entropy_map).item()
     return avg_entropy
 
-
 def compute_image_confidence(prob_map):
     """
     Compute the image-level confidence from per-pixel probability maps.
@@ -310,6 +286,101 @@ def compute_image_confidence(prob_map):
     max_probs, _ = torch.max(prob_map, dim=0)  # shape (H, W)
     avg_confidence = torch.mean(max_probs).item()
     return avg_confidence
+
+def compute_weed_confidence(prob_map, weed_class_idx=2):
+    """
+    Compute weed-specific confidence metrics.
+
+    Args:
+        prob_map (Tensor): shape (C, H, W), softmax probabilities over classes.
+        weed_class_idx (int): Index of the weed class (default: 2).
+
+    Returns:
+        dict: Dictionary containing various weed-related confidence metrics.
+    """
+    # Get weed probability map
+    weed_probs = prob_map[weed_class_idx]  # shape (H, W)
+    
+    # Get predicted class for each pixel
+    pred_classes = torch.argmax(prob_map, dim=0)  # shape (H, W)
+    
+    # Find pixels predicted as weed
+    weed_mask = (pred_classes == weed_class_idx)
+    
+    metrics = {}
+    
+    # Overall weed probability statistics
+    metrics['avg_weed_prob'] = torch.mean(weed_probs).item()
+    metrics['max_weed_prob'] = torch.max(weed_probs).item()
+    metrics['min_weed_prob'] = torch.min(weed_probs).item()
+    
+    # Weed detection metrics
+    total_pixels = pred_classes.numel()
+    weed_pixels = torch.sum(weed_mask).item()
+    metrics['weed_pixel_ratio'] = weed_pixels / total_pixels
+    
+    # Confidence of weed predictions (only for pixels predicted as weed)
+    if weed_pixels > 0:
+        weed_prediction_confidences = weed_probs[weed_mask]
+        metrics['avg_weed_prediction_confidence'] = torch.mean(weed_prediction_confidences).item()
+        metrics['min_weed_prediction_confidence'] = torch.min(weed_prediction_confidences).item()
+        
+        # How confident the model is about its weed predictions
+        max_probs, _ = torch.max(prob_map, dim=0)
+        weed_max_confidences = max_probs[weed_mask]
+        metrics['avg_weed_max_confidence'] = torch.mean(weed_max_confidences).item()
+    else:
+        metrics['avg_weed_prediction_confidence'] = 0.0
+        metrics['min_weed_prediction_confidence'] = 0.0
+        metrics['avg_weed_max_confidence'] = 0.0
+    
+    return metrics
+
+def compute_class_specific_confidence(prob_map, target_class_idx):
+    """
+    Compute confidence metrics for a specific class.
+
+    Args:
+        prob_map (Tensor): shape (C, H, W), softmax probabilities over classes.
+        target_class_idx (int): Index of the target class.
+
+    Returns:
+        dict: Dictionary containing class-specific confidence metrics.
+    """
+    # Get probability map for the target class
+    class_probs = prob_map[target_class_idx]  # shape (H, W)
+    
+    # Get predicted class for each pixel
+    pred_classes = torch.argmax(prob_map, dim=0)  # shape (H, W)
+    
+    # Find pixels predicted as target class
+    class_mask = (pred_classes == target_class_idx)
+    
+    metrics = {}
+    
+    # Overall class probability statistics
+    metrics[f'avg_class_{target_class_idx}_prob'] = torch.mean(class_probs).item()
+    metrics[f'max_class_{target_class_idx}_prob'] = torch.max(class_probs).item()
+    
+    # Class detection metrics
+    total_pixels = pred_classes.numel()
+    class_pixels = torch.sum(class_mask).item()
+    metrics[f'class_{target_class_idx}_pixel_ratio'] = class_pixels / total_pixels
+    
+    # Confidence of class predictions
+    if class_pixels > 0:
+        class_prediction_confidences = class_probs[class_mask]
+        metrics[f'avg_class_{target_class_idx}_prediction_confidence'] = torch.mean(class_prediction_confidences).item()
+        
+        # Overall prediction confidence for this class
+        max_probs, _ = torch.max(prob_map, dim=0)
+        class_max_confidences = max_probs[class_mask]
+        metrics[f'avg_class_{target_class_idx}_max_confidence'] = torch.mean(class_max_confidences).item()
+    else:
+        metrics[f'avg_class_{target_class_idx}_prediction_confidence'] = 0.0
+        metrics[f'avg_class_{target_class_idx}_max_confidence'] = 0.0
+    
+    return metrics
 
 def compute_incons(diff):
     return diff.sum()/(diff.shape[0]*diff.shape[1])
@@ -329,23 +400,17 @@ def sort_images_by_entropy(model, folder_path, input_shape, num_classes=3):
         img_tensor = img_tensor.to(device)
         img_flip = img_flip.to(device)
         with torch.no_grad():
-            output = model(img_tensor)
-            output = output.squeeze(0)
-            output_flip = model(img_flip)
-            output_flip_resized = output_flip.squeeze(0)
-        entropy_heatmap, ent = entropy_image_avg(output)
-        entropy_heatmap_flip, _ = entropy_image_avg(output_flip_resized)
-        entropy_heatmap_flip = cv2.flip(entropy_heatmap_flip, 1)
-        entropy_heatmap_sum = (entropy_heatmap + entropy_heatmap_flip)
-        ent_sum = compute_incons(entropy_heatmap_sum)
-        if idx % 100 == 0:
-            print(f"Processing image {idx+1}/{len(image_files)}")
-        list_index_ent.append((img_path, ent_sum))
-    list_index_ent = [(tensor, float(value)) for tensor, value in list_index_ent]
-    list_index_ent.sort(key=lambda x: x[1], reverse=True)
+            logits = model(img_tensor)
+            prob_map = F.softmax(logits.squeeze(0), dim=0)
+        entropy = compute_image_entropy(prob_map)
+        confidence = compute_class_specific_confidence(prob_map, target_class_idx=1)['avg_class_1_prediction_confidence']  # Assuming class 1 is the crop class
+        weed_confidence = compute_weed_confidence(prob_map, weed_class_idx=2)
+        list_index_ent.append((img_path, entropy, confidence, weed_confidence['avg_weed_prediction_confidence']))
+    list_index_ent = [(tensor, float(entropy), float(confidence), float(weed_conf)) for tensor, entropy, confidence, weed_conf in list_index_ent]
+    list_index_ent.sort(key=lambda x: x[3], reverse=True)
     with open('entropy_sorted.txt', 'w') as f:
-        for img_path, ent_value in list_index_ent:
-            f.write(f"{img_path},{ent_value}\n")
+        for img_path, ent_value, conf_value, weed_conf_value in list_index_ent:
+            f.write(f"{img_path},{ent_value},{conf_value},{weed_conf_value}\n")
     return list_index_ent
 
 # def query_and_update():
@@ -389,12 +454,12 @@ def main():
         sorted_list = sort_images_by_entropy(model, args.input_path, input_shape, num_classes=3)
         if sorted_list:
             print("Sorted images by entropy:")
-            for img_path, ent_value in sorted_list[:args.n_samples]:  # Show top n_samples
-                print(f"{img_path}: {ent_value:.4f}")
+            for img_path, ent_value, conf_value, weed_conf_value in sorted_list[:args.n_samples]:  # Show top n_samples
+                print(f"{img_path}: {ent_value:.4f}, {conf_value:.4f}, {weed_conf_value:.4f}")
             print("...")
-            for img_path, ent_value in sorted_list[-args.n_samples:]:  # Show bottom n_samples
-                print(f"{img_path}: {ent_value:.4f}")
-            
+            for img_path, ent_value, conf_value, weed_conf_value in sorted_list[-args.n_samples:]:  # Show bottom n_samples
+                print(f"{img_path}: {ent_value:.4f}, {conf_value:.4f}, {weed_conf_value:.4f}")
+
             # Visualize entropy results
             print(f"\nVisualizing {args.n_samples} highest and lowest entropy images...")
             visualize_entropy_results(model, sorted_list, input_shape, n=args.n_samples, num_classes=3)
