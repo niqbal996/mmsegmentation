@@ -52,24 +52,6 @@ class CropAndWeedDataset(BaseSegDataset):
 
         return data_list
 
-    # def load_annotations(self, img_path, seg_map_path):
-    #     """Load annotation from png file.
-    #     Args:
-    #         img_path (str): Path to image file.
-    #         seg_map_path (str): Path to segmentation png file.
-    #     Returns:
-    #         dict: The dict contains loaded image and semantic segmentation annotations.
-    #     """
-    #     img_info = dict(filename=img_path)
-    #     seg_map = np.array(Image.open(seg_map_path))
-        
-    #     # Convert class 3 to 1 (crop) and class 4 to 2 (weed)
-    #     # seg_map[seg_map == 3] = 1
-    #     # seg_map[seg_map == 4] = 2
-        
-    #     img_info['gt_seg_map'] = seg_map
-    #     return img_info
-
     def get_ann_info(self, idx):
         """Get annotation by index.
         Args:

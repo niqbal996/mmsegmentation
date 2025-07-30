@@ -1,14 +1,17 @@
 # dataset settings
+import os
 dataset_type_train = 'SyclopsDataset'
 dataset_type_val = 'PhenobenchDataset'
 
 data_root_train = '/netscratch/naeem/sugarbeet_syn_v6'
-data_root_val = '/netscratch/naeem/phenobench/'
-
+data_root_val = '/netscratch/naeem/phenobench'
+# /home/niqbal/anaconda3/envs/mmseg_310/lib/python3.10/site-packages/mmcv/transforms/loading.py
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('background', 'crop', 'weed'),
-    palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]]
+    palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]],
+    subset_ratio=float(os.environ.get('SUBSET_RATIO', 0.1)),
+    seed=42,
 )
 
 train_pipeline = [
@@ -37,6 +40,8 @@ train_dataloader = dict(
         type=dataset_type_train,
         data_root=data_root_train,
         metainfo=dataset_meta,
+        subset_ratio=dataset_meta['subset_ratio'],
+        seed=dataset_meta['seed'],
         data_prefix=dict(
             img_path='main_camera/rect',
             seg_map_path='main_camera_annotations/semantics'),

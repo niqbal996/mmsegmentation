@@ -41,14 +41,14 @@ train_dataloader = dict(
         pipeline=train_pipeline))
 
 val_dataloader = dict(
-    batch_size=4,
-    num_workers=4,
+    batch_size=12,
+    num_workers=8,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     dataset=dict(
         type=dataset_type_val,
         data_root=data_root_val,
-        variant='SugarBeet1',
+        variant='SugarBeet2',
         data_prefix=dict(
             img_path='images',
             seg_map_path='labelIds'),
