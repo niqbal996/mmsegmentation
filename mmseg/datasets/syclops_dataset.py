@@ -6,7 +6,7 @@ import os.path as osp
 import random
 
 @DATASETS.register_module()
-class CustomSegDataset(BaseSegDataset):
+class SyclopsDataset(BaseSegDataset):
     METAINFO = dict(
         classes=('background', 'crop', 'weed', 'other'),
         palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0], [0, 0, 255]]

@@ -2535,3 +2535,51 @@ class RandomDepthMix(BaseTransform):
 
         results['img'] = img
         return results
+
+@TRANSFORMS.register_module()
+class PhenoBenchReduceClasses(object):
+    """Convert class ids 3->1 and 4->2."""
+
+    def __call__(self, results):
+        """Call function to reduce classes.
+
+        Args:
+            results (dict): Result dict from :obj:`mmseg.CustomDataset`.
+
+        Returns:
+            dict: The dict contains reduced semantic segmentation annotations.
+        """
+
+        seg_map = results['gt_seg_map']
+        seg_map[seg_map == 3] = 1
+        seg_map[seg_map == 4] = 2
+
+        results['gt_seg_map'] = seg_map
+        return results
+    
+@TRANSFORMS.register_module()
+class CropAndWeed2Phenobench(object):
+    """Convert class ids """
+
+    def __call__(self, results):
+        """Call function to reduce classes.
+
+        Args:
+            results (dict): Result dict from :obj:`mmseg.CustomDataset`.
+
+        Returns:
+            dict: The dict contains reduced semantic segmentation annotations.
+        """
+        # Phenobench has 3 classes: Background 0, Crop 1, Weed 2
+        # CropandWeed Sugarbeet2 has 2 classes, Crop 1 and Background 2. 
+        seg_map = results['gt_seg_map'].copy()
+        # Subset Sugarbeet1 to Phenobench 
+        seg_map[results['gt_seg_map'] == 0] = 1        # 0->1: Crop
+        seg_map[results['gt_seg_map'] == 1] = 0        # 1->0: Background
+
+        # Subset Sugarbeet2 to Phenobench 
+        # seg_map[results['gt_seg_map'] == 0] = 1        # 0->1: Crop
+        # seg_map[results['gt_seg_map'] == 1] = 2        # 1->2: Weed
+        # seg_map[results['gt_seg_map'] == 2] = 0        # 2->0: Background
+        results['gt_seg_map'] = seg_map
+        return results

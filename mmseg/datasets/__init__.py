@@ -26,7 +26,9 @@ from .potsdam import PotsdamDataset
 from .refuge import REFUGEDataset
 from .stare import STAREDataset
 from .synapse import SynapseDataset
-from .phenobench import PhenobenchDataset
+from .phenobench_dataset import PhenobenchDataset
+from .cropandweed_dataset import CropAndWeedDataset
+from .syclops_dataset import SyclopsDataset
 # yapf: disable
 from .transforms import (CLAHE, AdjustGamma, Albu, BioMedical3DPad,
                          BioMedical3DRandomCrop, BioMedical3DRandomFlip,
@@ -43,7 +45,7 @@ from .transforms import (CLAHE, AdjustGamma, Albu, BioMedical3DPad,
 from .voc import PascalVOCDataset
 # yapf: enable
 __all__ = [
-    'BaseSegDataset', 'BioMedical3DRandomCrop', 'BioMedical3DRandomFlip', 'PhenobenchDataset',
+    'BaseSegDataset', 'BioMedical3DRandomCrop', 'BioMedical3DRandomFlip',
     'CityscapesDataset', 'PascalVOCDataset', 'ADE20KDataset',
     'PascalContextDataset', 'PascalContextDataset59', 'ChaseDB1Dataset',
     'DRIVEDataset', 'HRFDataset', 'STAREDataset', 'DarkZurichDataset',
@@ -62,4 +64,5 @@ __all__ = [
     'LoadMultipleRSImageFromFile', 'LoadSingleRSImageFromFile',
     'ConcatCDInput', 'BaseCDDataset', 'DSDLSegDataset', 'BDD100KDataset',
     'NYUDataset', 'HSIDrive20Dataset', 
+    'CropAndWeedDataset', 'SyclopsDataset', 'PhenobenchDataset',
 ]
