@@ -1,7 +1,7 @@
 dataset_type_train = 'CropAndWeedDataset'
-data_root_train = '/mnt/e/datasets/cropandweed_dataset'
+data_root_train = '/ds/images/cropandweed/'
 dataset_type_val = 'PhenobenchDataset'
-data_root_val = '/mnt/e/datasets/phenobench/'
+data_root_val = '/netscratch/naeem/phenobench/'
 
 # Define your dataset's classes and palette
 dataset_meta = dict(

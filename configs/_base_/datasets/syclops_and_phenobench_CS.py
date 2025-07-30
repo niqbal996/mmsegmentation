@@ -1,7 +1,10 @@
-dataset_type_train = 'PhenobenchDataset'
-data_root_train = '/netscratch/naeem/phenobench/'
-dataset_type_val = 'CropAndWeedDataset'
-data_root_val = '/ds/images/cropandweed/'
+# dataset settings
+dataset_type_train = 'SyclopsDatasetCS'
+dataset_type_val = 'PhenobenchDataset'
+
+data_root_train = '/netscratch/naeem/sugarbeet_syn_v6'
+data_root_val = '/netscratch/naeem/phenobench/'
+
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('background', 'crop', 'weed'),
@@ -10,50 +13,50 @@ dataset_meta = dict(
 
 train_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='LoadAnnotations'),
-    dict(type='PhenoBenchReduceClasses'),
-    dict(type='Resize', scale=(1920, 1088), keep_ratio=False),  # Force exact size
-    dict(type='RandomCrop', crop_size=(1024, 1024), cat_max_ratio=0.75),  # Crop to multiple of 8
+    dict(type='LoadAnnotationsFromNPZ'),
+    dict(type='RandomResize', scale=(1024, 1024), ratio_range=(0.5, 2.0), keep_ratio=True),
+    dict(type='RandomCrop', crop_size=(512, 512), cat_max_ratio=0.75),
     dict(type='RandomFlip', prob=0.5),
     dict(type='PhotoMetricDistortion'),
     dict(type='PackSegInputs')
 ]
-
 test_pipeline = [
     dict(type='LoadImageFromFile'),
+    dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
     dict(type='LoadAnnotations'),
-    dict(type='CropAndWeed2Phenobench'),
-    # dict(type='Resize', scale=(1024, 1024), keep_ratio=False),  # Force to multiple of 8
+    dict(type='PhenoBenchReduceClasses'),
     dict(type='PackSegInputs')
 ]
 
 train_dataloader = dict(
-    batch_size=1,
+    batch_size=8,
     num_workers=4,
     persistent_workers=True,
-    sampler=dict(type='InfiniteSampler', shuffle=False),
+    sampler=dict(type='InfiniteSampler', shuffle=True),
     dataset=dict(
         type=dataset_type_train,
         data_root=data_root_train,
+        metainfo=dataset_meta,
+        file_list='/netscratch/naeem/sugarbeet_syn_v6/merged_all.txt',
+        subset_fraction=1.0, 
         data_prefix=dict(
-            img_path='train/images',
-            seg_map_path='train/semantics'),
+            img_path='main_camera/rect',
+            seg_map_path='main_camera_annotations/semantics'),
         pipeline=train_pipeline))
 
 val_dataloader = dict(
-    batch_size=4,
+    batch_size=6,
     num_workers=4,
     persistent_workers=True,
-    sampler=dict(type='DefaultSampler', shuffle=True),
+    sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
         type=dataset_type_val,
         data_root=data_root_val,
-        variant='SugarBeet1',
+        metainfo=dataset_meta,
         data_prefix=dict(
-            img_path='images',
-            seg_map_path='labelIds'),
+            img_path='val/images',
+            seg_map_path='val/semantics'),
         pipeline=test_pipeline))
-
 
 test_dataloader = val_dataloader
 

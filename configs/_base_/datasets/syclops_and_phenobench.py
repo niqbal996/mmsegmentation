@@ -1,9 +1,9 @@
 # dataset settings
-dataset_type_train = 'CustomSegDataset'
+dataset_type_train = 'SyclopsDataset'
 dataset_type_val = 'PhenobenchDataset'
 
-data_root_train = '/mnt/e/datasets/sugarbeet_syn_v6'
-data_root_val = '/mnt/e/datasets/phenobench/'
+data_root_train = '/netscratch/naeem/sugarbeet_syn_v6'
+data_root_val = '/netscratch/naeem/phenobench/'
 
 # Define your dataset's classes and palette
 dataset_meta = dict(
