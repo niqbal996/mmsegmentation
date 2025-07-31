@@ -8,7 +8,8 @@ import torch.serialization
 from mmengine import Config
 from mmengine.runner import load_checkpoint
 from torch import nn
-
+from mmseg.utils import register_all_modules
+register_all_modules()
 from mmseg.models import build_segmentor
 
 torch.manual_seed(3)
@@ -114,7 +115,7 @@ def pytorch2libtorch(model,
     imgs = mm_inputs.pop('imgs')
 
     # replace the original forword with forward_dummy
-    model.forward = model.forward_dummy
+    model.forward = model.inference
     model.eval()
     traced_model = torch.jit.trace(
         model,
@@ -127,6 +128,14 @@ def pytorch2libtorch(model,
 
     traced_model.save(output_file)
     print(f'Successfully exported TorchScript model: {output_file}')
+
+    torch.onnx.export(
+                    model,
+                    imgs,
+                    output_file.replace('.pt', '.onnx'),
+                    input_names=['imgs'],
+                    output_names=['seg_logits'],
+                    opset_version=11)
 
 
 def parse_args():
