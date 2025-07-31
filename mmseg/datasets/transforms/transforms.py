@@ -2558,7 +2558,7 @@ class PhenoBenchReduceClasses(object):
         return results
     
 @TRANSFORMS.register_module()
-class CropAndWeed2Phenobench(object):
+class Sugarbeet1_2Phenobench(object):
     """Convert class ids """
 
     def __call__(self, results):
@@ -2574,12 +2574,100 @@ class CropAndWeed2Phenobench(object):
         # CropandWeed Sugarbeet2 has 2 classes, Crop 1 and Background 2. 
         seg_map = results['gt_seg_map'].copy()
         # Subset Sugarbeet1 to Phenobench 
-        # seg_map[results['gt_seg_map'] == 0] = 1        # 0->1: Crop
-        # seg_map[results['gt_seg_map'] == 1] = 0        # 1->0: Background
+        seg_map[results['gt_seg_map'] == 0] = 1        # 0->1: Crop
+        seg_map[results['gt_seg_map'] == 1] = 0        # 1->0: Background
+
+        results['gt_seg_map'] = seg_map
+        return results
+    
+@TRANSFORMS.register_module()
+class Sugarbeet2_2Phenobench(object):
+    """Convert class ids """
+
+    def __call__(self, results):
+        """Call function to reduce classes.
+
+        Args:
+            results (dict): Result dict from :obj:`mmseg.CustomDataset`.
+
+        Returns:
+            dict: The dict contains reduced semantic segmentation annotations.
+        """
+        # Phenobench has 3 classes: Background 0, Crop 1, Weed 2
+        # CropandWeed Sugarbeet2 has 2 classes, Crop 1 and Background 2. 
+        seg_map = results['gt_seg_map'].copy()
 
         # Subset Sugarbeet2 to Phenobench 
         seg_map[results['gt_seg_map'] == 0] = 1        # 0->1: Crop
         seg_map[results['gt_seg_map'] == 1] = 2        # 1->2: Weed
         seg_map[results['gt_seg_map'] == 2] = 0        # 2->0: Background
+        results['gt_seg_map'] = seg_map
+        return results
+    
+@TRANSFORMS.register_module()
+class Sugarbeet3_2Phenobench(object):
+    """Convert class ids """
+
+    def __call__(self, results):
+        """Call function to reduce classes.
+
+        Args:
+            results (dict): Result dict from :obj:`mmseg.CustomDataset`.
+
+        Returns:
+            dict: The dict contains reduced semantic segmentation annotations.
+        """
+        # Phenobench has 3 classes: Background 0, Crop 1, Weed 2
+        # CropandWeed Sugarbeet2 has 2 classes, Crop 1 and Background 2. 
+        seg_map = results['gt_seg_map'].copy()
+
+        # Subset Sugarbeet2 to Phenobench 
+        seg_map[results['gt_seg_map'] == 0] = 1        # 0->1: Crop
+        seg_map[results['gt_seg_map'] == 1] = 2        # 1->2: Weed
+        seg_map[results['gt_seg_map'] == 2] = 0        # 2->0: Background
+        results['gt_seg_map'] = seg_map
+        return results
+    
+@TRANSFORMS.register_module()
+class SugarbeetFine_2Phenobench(object):
+    """Convert class ids """
+
+    def __call__(self, results):
+        """Call function to reduce classes.
+
+        Args:
+            results (dict): Result dict from :obj:`mmseg.CustomDataset`.
+
+        Returns:
+            dict: The dict contains reduced semantic segmentation annotations.
+        """
+        # Phenobench has 3 classes: Background 0, Crop 1, Weed 2
+        # CropandWeed Sugarbeet2 has 2 classes, Crop 1 and Background 2. 
+        seg_map = results['gt_seg_map'].copy()
+
+        # Subset Sugarbeet2 to Phenobench 
+        seg_map[results['gt_seg_map'] == 1] = 1
+        seg_map[results['gt_seg_map'] == 2] = 1
+        seg_map[results['gt_seg_map'] == 3] = 1
+        seg_map[results['gt_seg_map'] == 4] = 1
+        seg_map[results['gt_seg_map'] == 5] = 1
+        seg_map[results['gt_seg_map'] == 6] = 1
+        seg_map[results['gt_seg_map'] == 7] = 2
+        seg_map[results['gt_seg_map'] == 8] = 2
+        seg_map[results['gt_seg_map'] == 9] = 2
+        seg_map[results['gt_seg_map'] == 10] = 2
+        seg_map[results['gt_seg_map'] == 11] = 2
+        seg_map[results['gt_seg_map'] == 12] = 2
+        seg_map[results['gt_seg_map'] == 13] = 2
+        seg_map[results['gt_seg_map'] == 14] = 2
+        seg_map[results['gt_seg_map'] == 15] = 2
+        seg_map[results['gt_seg_map'] == 16] = 2
+        seg_map[results['gt_seg_map'] == 17] = 2
+        seg_map[results['gt_seg_map'] == 18] = 2
+        seg_map[results['gt_seg_map'] == 19] = 2
+        seg_map[results['gt_seg_map'] == 20] = 2
+        seg_map[results['gt_seg_map'] == 21] = 2
+        seg_map[results['gt_seg_map'] == 22] = 2
+
         results['gt_seg_map'] = seg_map
         return results
