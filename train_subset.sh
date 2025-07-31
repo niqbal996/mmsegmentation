@@ -20,12 +20,13 @@ echo "✅ Subset Index (percentage): $subset_percentage%"
 echo "✅ Converted Subset Ratio: $subset_ratio"
 
 # Define dynamic output directory with subset percentage
-output_dir="/netscratch/naeem/mmseg_output/Mask2Former_random_sampling_phenobench_${subset_percentage}"
+output_dir="/netscratch/naeem/mmseg_output/Mask2Former_cosine_sampling_synthetic_500_out_of_2k_${subset_percentage}"
 echo "✅ Output directory: $output_dir"
 sed -i "102s|.*|                img_bytes, flag=self.color_type, backend='pillow')|" /root/miniconda3/envs/mmseg/lib/python3.8/site-packages/mmcv/transforms/loading.py
 export PYTHONPATH=$PYTHONPATH:/home/iqbal/mmsegmentation/
 source ~/miniconda3/bin/activate
 conda activate mmseg
+python3 -m pip install -v -e .
 python3 tools/train.py \
-configs/mask2former/mask2former_r50_phenobench-512x512.py \
+configs/mask2former/mask2former_r50_sugarbeet_syn_v6_CS-512x512.py \
 --work-dir $output_dir

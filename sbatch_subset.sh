@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name phenobench_mmseg_random_sampling
+#SBATCH --job-name Synthetic_mmseg_cosine_sampling
 #SBATCH --partition=RTXA6000
 #SBATCH --mem=40G                  # 🟢 Per task memory
 #SBATCH --cpus-per-task=5          # 🟢 Per task CPU
@@ -17,12 +17,12 @@ subset_indices=(1 2 5 10 20 40 80 100)
 subset_percentage=${subset_indices[$SLURM_ARRAY_TASK_ID]}
 
 # Set dynamic job name
-SLURM_JOB_NAME="Mask2Former_subset_phenobench_${subset_percentage}"
+SLURM_JOB_NAME="Mask2Former_subset_synthetic_${subset_percentage}"
 echo "✅ Running job for subset percentage: $subset_percentage%"
 
 # Pass subset_percentage to train_subset.sh
 srun \
-  --container-mounts=/netscratch/naeem:/netscratch/naeem,/home/iqbal/mmsegmentation:/home/iqbal/mmsegmentation,/ds/images/cropandweed:/ds/images/cropandweed \
+  --container-mounts=/netscratch/naeem:/netscratch/naeem,/home/iqbal/mmseg_forked:/home/iqbal/mmsegmentation,/ds/images/cropandweed:/ds/images/cropandweed \
   --container-image=/netscratch/naeem/mmseg_23.09_07_2025.sqsh  \
   --container-workdir=/home/iqbal/mmsegmentation \
   --time=01-00:00 \
