@@ -13,7 +13,9 @@ from .transforms import (CLAHE, AdjustGamma, Albu, BioMedical3DPad,
                          RandomDepthMix, RandomFlip, RandomMosaic,
                          RandomRotate, RandomRotFlip, Rerange, Resize,
                          ResizeShortestEdge, ResizeToMultiple, RGB2Gray,
-                         PhenoBenchReduceClasses, CropAndWeed2Phenobench,
+                         PhenoBenchReduceClasses,
+                         Sugarbeet1_2Phenobench, Sugarbeet2_2Phenobench,
+                         Sugarbeet3_2Phenobench, SugarbeetFine_2Phenobench,
                          SegRescale)
 
 # yapf: enable
@@ -28,5 +30,7 @@ __all__ = [
     'RandomRotFlip', 'Albu', 'LoadSingleRSImageFromFile', 'ConcatCDInput',
     'LoadMultipleRSImageFromFile', 'LoadDepthAnnotation', 'RandomDepthMix',
     'RandomFlip', 'Resize',
-    'PhenoBenchReduceClasses', 'CropAndWeed2Phenobench'
+    'PhenoBenchReduceClasses', 'Sugarbeet1_2Phenobench',
+    'Sugarbeet2_2Phenobench', 'Sugarbeet3_2Phenobench',
+    'SugarbeetFine_2Phenobench'
 ]

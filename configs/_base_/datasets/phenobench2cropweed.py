@@ -1,7 +1,7 @@
 dataset_type_train = 'PhenobenchDataset'
-data_root_train = '/netscratch/naeem/phenobench/'
+data_root_train = '/mnt/e/datasets/phenobench/'
 dataset_type_val = 'CropAndWeedDataset'
-data_root_val = '/ds/images/cropandweed/'
+data_root_val = '/mnt/e/datasets/cropandweed_dataset/'
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('background', 'crop', 'weed'),
@@ -22,7 +22,7 @@ train_pipeline = [
 test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations'),
-    dict(type='CropAndWeed2Phenobench'),
+    dict(type='SugarbeetFine_2Phenobench'),
     # dict(type='Resize', scale=(1024, 1024), keep_ratio=False),  # Force to multiple of 8
     dict(type='PackSegInputs')
 ]
@@ -41,14 +41,14 @@ train_dataloader = dict(
         pipeline=train_pipeline))
 
 val_dataloader = dict(
-    batch_size=12,
-    num_workers=8,
+    batch_size=1,
+    num_workers=1,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=True),
     dataset=dict(
         type=dataset_type_val,
         data_root=data_root_val,
-        variant='SugarBeet2',
+        variant='SugarBeetFine',
         data_prefix=dict(
             img_path='images',
             seg_map_path='labelIds'),
