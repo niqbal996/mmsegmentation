@@ -1,5 +1,5 @@
 _base_ = ['../_base_/default_runtime.py', 
-          '../_base_/datasets/phenobench_random_sampling.py']
+          '../_base_/datasets/phenobench3.py']
 
 custom_imports = dict(imports='mmdet.models', allow_failed_imports=False)
 num_classes = 3
@@ -186,7 +186,7 @@ param_scheduler = [
 train_cfg = dict(
     type='IterBasedTrainLoop', max_iters=30000, val_interval=2000)
 val_cfg = dict(type='ValLoop')
-test_cfg = dict(type='TestLoop')
+# test_cfg = dict(type='TestLoop')
 default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=50, log_metric_by_epoch=False),
