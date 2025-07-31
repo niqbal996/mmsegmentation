@@ -26,9 +26,9 @@ from .potsdam import PotsdamDataset
 from .refuge import REFUGEDataset
 from .stare import STAREDataset
 from .synapse import SynapseDataset
-from .phenobench_dataset import PhenobenchDataset
+from .phenobench_dataset import PhenobenchDataset, PhenobenchDatasetAL
 from .cropandweed_dataset import CropAndWeedDataset
-from .syclops_dataset import SyclopsDataset
+from .syclops_dataset import SyclopsDataset, SyclopsDatasetCS
 # yapf: disable
 from .transforms import (CLAHE, AdjustGamma, Albu, BioMedical3DPad,
                          BioMedical3DRandomCrop, BioMedical3DRandomFlip,
@@ -64,5 +64,7 @@ __all__ = [
     'LoadMultipleRSImageFromFile', 'LoadSingleRSImageFromFile',
     'ConcatCDInput', 'BaseCDDataset', 'DSDLSegDataset', 'BDD100KDataset',
     'NYUDataset', 'HSIDrive20Dataset', 
-    'CropAndWeedDataset', 'SyclopsDataset', 'PhenobenchDataset',
+    'CropAndWeedDataset', 
+    'SyclopsDataset', 'SyclopsDatasetCS',
+    'PhenobenchDataset', 'PhenobenchDatasetAL',
 ]

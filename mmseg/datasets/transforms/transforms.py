@@ -2574,12 +2574,12 @@ class CropAndWeed2Phenobench(object):
         # CropandWeed Sugarbeet2 has 2 classes, Crop 1 and Background 2. 
         seg_map = results['gt_seg_map'].copy()
         # Subset Sugarbeet1 to Phenobench 
-        seg_map[results['gt_seg_map'] == 0] = 1        # 0->1: Crop
-        seg_map[results['gt_seg_map'] == 1] = 0        # 1->0: Background
+        # seg_map[results['gt_seg_map'] == 0] = 1        # 0->1: Crop
+        # seg_map[results['gt_seg_map'] == 1] = 0        # 1->0: Background
 
         # Subset Sugarbeet2 to Phenobench 
-        # seg_map[results['gt_seg_map'] == 0] = 1        # 0->1: Crop
-        # seg_map[results['gt_seg_map'] == 1] = 2        # 1->2: Weed
-        # seg_map[results['gt_seg_map'] == 2] = 0        # 2->0: Background
+        seg_map[results['gt_seg_map'] == 0] = 1        # 0->1: Crop
+        seg_map[results['gt_seg_map'] == 1] = 2        # 1->2: Weed
+        seg_map[results['gt_seg_map'] == 2] = 0        # 2->0: Background
         results['gt_seg_map'] = seg_map
         return results

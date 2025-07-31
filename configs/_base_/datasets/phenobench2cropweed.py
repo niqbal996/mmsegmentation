@@ -1,7 +1,7 @@
 dataset_type_train = 'PhenobenchDataset'
-data_root_train = '/mnt/e/datasets/phenobench/'
+data_root_train = '/netscratch/naeem/phenobench/'
 dataset_type_val = 'CropAndWeedDataset'
-data_root_val = '/mnt/e/datasets/cropandweed_dataset'
+data_root_val = '/ds/images/cropandweed/'
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('background', 'crop', 'weed'),
@@ -41,10 +41,9 @@ train_dataloader = dict(
         pipeline=train_pipeline))
 
 val_dataloader = dict(
-    batch_size=4,
-    num_workers=4,
+    batch_size=12,
+    num_workers=8,
     persistent_workers=True,
-    
     sampler=dict(type='DefaultSampler', shuffle=True),
     dataset=dict(
         type=dataset_type_val,

@@ -1,24 +1,27 @@
-dataset_type_train = 'CropAndWeedDataset'
-data_root_train = '/ds/images/cropandweed/'
+# dataset settings
+dataset_type_train = 'SyclopsDatasetCS'
 dataset_type_val = 'PhenobenchDataset'
+
+data_root_train = '/netscratch/naeem/sugarbeet_syn_v6'
 data_root_val = '/netscratch/naeem/phenobench/'
 
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('background', 'crop', 'weed'),
-    palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]]
+    palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]],
+    subset_ratio=float(os.environ.get('SUBSET_RATIO', 0.1)),
+    seed=42,
 )
 
 train_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='LoadAnnotations'),
+    dict(type='LoadAnnotationsFromNPZ'),
     dict(type='RandomResize', scale=(1024, 1024), ratio_range=(0.5, 2.0), keep_ratio=True),
     dict(type='RandomCrop', crop_size=(512, 512), cat_max_ratio=0.75),
     dict(type='RandomFlip', prob=0.5),
     dict(type='PhotoMetricDistortion'),
     dict(type='PackSegInputs')
 ]
-
 test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
@@ -28,25 +31,32 @@ test_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=4,
+    batch_size=8,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='InfiniteSampler', shuffle=True),
     dataset=dict(
         type=dataset_type_train,
         data_root=data_root_train,
+        metainfo=dataset_meta,
+        subset_ratio=dataset_meta['subset_ratio'],
+        seed=dataset_meta['seed'],
+        file_list='/netscratch/naeem/sugarbeet_syn_v6/merged_all.txt',
+        subset_fraction=1.0, 
         data_prefix=dict(
-            img_path='images',
-            seg_map_path='labelIds'),
+            img_path='main_camera/rect',
+            seg_map_path='main_camera_annotations/semantics'),
         pipeline=train_pipeline))
+
 val_dataloader = dict(
-    batch_size=1,
+    batch_size=6,
     num_workers=4,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
         type=dataset_type_val,
         data_root=data_root_val,
+        metainfo=dataset_meta,
         data_prefix=dict(
             img_path='val/images',
             seg_map_path='val/semantics'),
