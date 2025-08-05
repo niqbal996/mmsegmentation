@@ -1,3 +1,4 @@
+import os
 # dataset settings
 dataset_type_train = 'SyclopsDatasetCS'
 dataset_type_val = 'PhenobenchDataset'
@@ -10,7 +11,7 @@ dataset_meta = dict(
     classes=('background', 'crop', 'weed'),
     palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]],
     subset_ratio=float(os.environ.get('SUBSET_RATIO', 0.1)),
-    seed=42,
+    random_seed=42,
 )
 
 train_pipeline = [
@@ -40,9 +41,8 @@ train_dataloader = dict(
         data_root=data_root_train,
         metainfo=dataset_meta,
         subset_ratio=dataset_meta['subset_ratio'],
-        seed=dataset_meta['seed'],
+        random_seed=dataset_meta['random_seed'],
         file_list='/netscratch/naeem/sugarbeet_syn_v6/merged_all.txt',
-        subset_fraction=1.0, 
         data_prefix=dict(
             img_path='main_camera/rect',
             seg_map_path='main_camera_annotations/semantics'),
