@@ -17,9 +17,20 @@ import csv
 import torch
 import torch.nn.functional as F
 import numpy as np
+import math
 from typing import Dict, List, Tuple, Optional
 from tqdm import tqdm
 import argparse
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+# Custom palette: 0=black, 1=green, 2=red
+palette = np.array([
+    [0, 0, 0],      # 0: black
+    [0, 255, 0],    # 1: green
+    [255, 0, 0]     # 2: red
+], dtype=np.uint8)
 
 # MMSeg imports
 from mmengine import Config
@@ -63,77 +74,176 @@ class ActiveLearningScoreGenerator:
         # Initialize floating region score calculator
         self.floating_score = FloatingRegionScore(
             in_channels=num_classes, 
-            size=2* self.radius_K + 1
+            size=2*self.radius_K + 1
         ).to(device)
+        
+        # Initialize region selection parameters
+        self.region_size = 2*self.radius_K + 1
+        self.per_region_pixels = self.region_size ** 2
+        self.active_radius = self.radius_K
+        self.mask_radius = self.active_radius * 2
+        self.active_ratio = self.ratio / 10000  # Convert percentage to ratio
     
-    def get_all_active_regions_mask(self, scores, region_size=11, mask_radius=None, active_ratio=0.01):
+    def get_all_active_regions_mask(self, 
+                                    scores: torch.Tensor,
+                                    groundtruth_mask: np.ndarray,
+                                    active_mask: np.ndarray,
+                                    active_regions: int,
+                                    active: torch.Tensor,
+                                    selected: torch.Tensor):
         """
-        Return a binary mask (black/white) of all active regions selected by the region selection logic.
+        Return a binary mask of all active regions selected by the region selection logic.
+        This function implements the same logic as the original RegionSelection but for offline processing.
+        
         Args:
-            scores: np.ndarray, informativeness score map (H, W)
-            region_size: int, size of the region to highlight (default: 11)
-            mask_radius: int, size of the region to mask out after selection (default: 2*region_size-1)
-            active_ratio: float, ratio of image pixels to select as active regions (default: 0.01)
+            scores: torch.Tensor, informativeness score map (H, W)
+            groundtruth_mask: np.ndarray, ground truth segmentation mask
+            active_mask: np.ndarray, current active mask to update
+            active_regions: int, number of regions to select
+            active: torch.Tensor, indicator for masked out regions
+            selected: torch.Tensor, indicator for selected regions
+            
         Returns:
-            np.ndarray: binary mask (H, W), 1 for all active regions, 0 elsewhere
+            tuple: (updated_active_mask, active_indicator, selected_indicator) as numpy arrays
         """
-        import numpy as np
-        scores = scores.copy()
+        # Clone scores to avoid modifying original
+        scores = scores.clone().detach()
+        groundtruth_mask = torch.tensor(groundtruth_mask, dtype=torch.bool).to(self.device)
+        
+        # Ensure tensors are properly shaped and on correct device
+        active = active.squeeze(0).to(self.device)
+        selected = selected.squeeze(0).to(self.device)
+        active_mask = torch.tensor(active_mask.squeeze(0), dtype=torch.bool).to(self.device)
+        
         H, W = scores.shape
-        mask = np.zeros_like(scores, dtype=np.uint8)
-        if mask_radius is None:
-            mask_radius = region_size * 2 - 1
-        per_region_pixels = region_size ** 2
-        num_pixel_cur = H * W
-        active_regions = int(np.ceil(num_pixel_cur * active_ratio / per_region_pixels))
-        active_radius = region_size // 2
-        mask_radius_pix = mask_radius // 2
-        for _ in range(active_regions):
-            values, indices_h = np.max(scores, axis=0), np.argmax(scores, axis=0)
-            idx_w = np.argmax(values)
-            idx_h = indices_h[idx_w]
-            w, h = idx_w, idx_h
-            # active region
-            active_start_w = w - active_radius if w - active_radius >= 0 else 0
-            active_start_h = h - active_radius if h - active_radius >= 0 else 0
-            active_end_w = min(w + active_radius + 1, W)
-            active_end_h = min(h + active_radius + 1, H)
-            # mask region
-            mask_start_w = w - mask_radius_pix if w - mask_radius_pix >= 0 else 0
-            mask_start_h = h - mask_radius_pix if h - mask_radius_pix >= 0 else 0
-            mask_end_w = min(w + mask_radius_pix + 1, W)
-            mask_end_h = min(h + mask_radius_pix + 1, H)
-            # set active region
-            mask[active_start_h:active_end_h, active_start_w:active_end_w] = 1
-            # mask out region for next selection
-            scores[mask_start_h:mask_end_h, mask_start_w:mask_end_w] = -np.inf
-        return mask
-    
-    def visualize_results(self, 
-                          scores, 
-                          pred_mask, 
-                          region_impurity, 
-                          prediction_uncertainty, 
-                          gt_mask=None, 
-                          save_path=None):
+        
+        # Set scores of already active regions to -inf (same as original RegionSelection)
+        scores[active] = -float('inf')
+        
+        # Iteratively select regions with highest scores
+        for pixel in range(active_regions):
+            # Find location with maximum score
+            values, indices_h = torch.max(scores, dim=0)
+            _, indices_w = torch.max(values, dim=0)
+            w = indices_w.item()
+            h = indices_h[w].item()
+            
+            # Calculate active region bounds (region that gets labeled)
+            active_start_w = w - self.active_radius if w - self.active_radius >= 0 else 0
+            active_start_h = h - self.active_radius if h - self.active_radius >= 0 else 0
+            active_end_w = min(w + self.active_radius + 1, W)
+            active_end_h = min(h + self.active_radius + 1, H)
+            
+            # Calculate mask region bounds (larger region that gets masked out)
+            mask_start_w = w - self.mask_radius if w - self.mask_radius >= 0 else 0
+            mask_start_h = h - self.mask_radius if h - self.mask_radius >= 0 else 0
+            mask_end_w = min(w + self.mask_radius + 1, W)
+            mask_end_h = min(h + self.mask_radius + 1, H)
+            
+            # Mask out the larger region to prevent overlapping selections
+            scores[mask_start_h:mask_end_h, mask_start_w:mask_end_w] = -float('inf')
+            active[mask_start_h:mask_end_h, mask_start_w:mask_end_w] = True
+            selected[active_start_h:active_end_h, active_start_w:active_end_w] = True
+            
+            # Update active mask with ground truth labels for the selected region
+            active_mask[active_start_h:active_end_h, active_start_w:active_end_w] = \
+                        groundtruth_mask[active_start_h:active_end_h, active_start_w:active_end_w]
+        
+        return active_mask.cpu().numpy(), active.cpu().numpy(), selected.cpu().numpy()
+
+    def get_regions_above_threshold(self, 
+                                   scores: torch.Tensor,
+                                   groundtruth_mask: np.ndarray,
+                                   active_mask: np.ndarray,
+                                   threshold: float,
+                                   active: torch.Tensor,
+                                   selected: torch.Tensor,
+                                   max_regions: int = None):
         """
-        Visualize ground truth, prediction, region impurity, prediction uncertainty, and scores in a 2x3 grid (enlarged for detail).
+        Select all regions above a certain uncertainty threshold.
+        
         Args:
-            scores: torch.Tensor or np.ndarray, informativeness score map (H, W)
-            pred_mask: np.ndarray, predicted segmentation mask (H, W)
-            region_impurity: np.ndarray, region impurity heatmap (H, W)
-            prediction_uncertainty: np.ndarray, prediction uncertainty heatmap (H, W)
-            gt_mask: np.ndarray, ground truth mask (H, W), optional
+            scores: torch.Tensor, informativeness score map (H, W)
+            groundtruth_mask: np.ndarray, ground truth segmentation mask
+            active_mask: np.ndarray, current active mask to update
+            threshold: float, minimum score threshold for region selection
+            active: torch.Tensor, indicator for masked out regions
+            selected: torch.Tensor, indicator for selected regions
+            max_regions: int, optional maximum number of regions to select
+            
+        Returns:
+            tuple: (updated_active_mask, active_indicator, selected_indicator) as numpy arrays
+        """
+        # Clone scores to avoid modifying original
+        scores = scores.clone().detach()
+        groundtruth_mask = torch.tensor(groundtruth_mask, dtype=torch.bool).to(self.device)
+        
+        # Ensure tensors are properly shaped and on correct device
+        active = active.squeeze(0).to(self.device)
+        selected = selected.squeeze(0).to(self.device)
+        active_mask = torch.tensor(active_mask.squeeze(0), dtype=torch.bool).to(self.device)
+        
+        H, W = scores.shape
+        
+        # Set scores of already active regions to -inf
+        scores[active] = -float('inf')
+        
+        regions_selected = 0
+        
+        # Continue selecting regions while above threshold
+        while True:
+            # Find location with maximum score
+            max_score = torch.max(scores)
+            
+            # Break if below threshold or max regions reached
+            if max_score < threshold or max_score == -float('inf'):
+                break
+            if max_regions is not None and regions_selected >= max_regions:
+                break
+                
+            values, indices_h = torch.max(scores, dim=0)
+            _, indices_w = torch.max(values, dim=0)
+            w = indices_w.item()
+            h = indices_h[w].item()
+            
+            # Calculate region bounds
+            active_start_w = w - self.active_radius if w - self.active_radius >= 0 else 0
+            active_start_h = h - self.active_radius if h - self.active_radius >= 0 else 0
+            active_end_w = min(w + self.active_radius + 1, W)
+            active_end_h = min(h + self.active_radius + 1, H)
+            
+            mask_start_w = w - self.mask_radius if w - self.mask_radius >= 0 else 0
+            mask_start_h = h - self.mask_radius if h - self.mask_radius >= 0 else 0
+            mask_end_w = min(w + self.mask_radius + 1, W)
+            mask_end_h = min(h + self.mask_radius + 1, H)
+            
+            # Mask out the region
+            scores[mask_start_h:mask_end_h, mask_start_w:mask_end_w] = -float('inf')
+            active[mask_start_h:mask_end_h, mask_start_w:mask_end_w] = True
+            selected[active_start_h:active_end_h, active_start_w:active_end_w] = True
+            
+            # Update active mask with ground truth
+            active_mask[active_start_h:active_end_h, active_start_w:active_end_w] = \
+                        groundtruth_mask[active_start_h:active_end_h, active_start_w:active_end_w]
+            
+            regions_selected += 1
+        
+        return active_mask.cpu().numpy(), active.cpu().numpy(), selected.cpu().numpy()
+
+    def visualize_results(self, mask_dict: Dict[str, np.ndarray], save_path=None):
+        """
+        Visualize all tensors in mask_dict in a 2x3 grid (enlarged for detail).
+        Args:
+            mask_dict: dict containing all tensors to visualize (scores, predicted_mask, region_impurity, prediction_uncertainty, gt_mask, active_mask)
             save_path: Optional path to save visualization
         """
-        import matplotlib.pyplot as plt
-        from matplotlib.colors import Normalize
-        # Custom palette: 0=black, 1=green, 2=red
-        palette = np.array([
-            [0, 0, 0],      # 0: black
-            [0, 255, 0],    # 1: green
-            [255, 0, 0]     # 2: red
-        ], dtype=np.uint8)
+        # Unpack tensors from dict
+        scores = mask_dict.get('scores')
+        predicted_mask = mask_dict.get('predicted_mask')
+        region_impurity = mask_dict.get('region_impurity')
+        prediction_uncertainty = mask_dict.get('prediction_uncertainty')
+        gt_mask = mask_dict.get('gt_mask')
+        active_mask = mask_dict.get('active_mask')
 
         # Prepare scores as numpy
         if isinstance(scores, torch.Tensor):
@@ -141,7 +251,6 @@ class ActiveLearningScoreGenerator:
         else:
             scores_np = np.array(scores).squeeze()
 
-        # Always show 2x3 grid: GT, Prediction, Region Impurity, Uncertainty, Scores, Active Region
         fig, axs = plt.subplots(2, 3, figsize=(21, 14))
         # Top-left: Ground Truth
         if gt_mask is not None:
@@ -153,7 +262,7 @@ class ActiveLearningScoreGenerator:
         axs[0, 0].axis('off')
 
         # Top-middle: Prediction
-        pred_mask_rgb = palette[pred_mask.clip(0, 2)]
+        pred_mask_rgb = palette[predicted_mask.clip(0, 2)]
         axs[0, 1].imshow(pred_mask_rgb)
         axs[0, 1].set_title('Prediction', fontsize=18)
         axs[0, 1].axis('off')
@@ -176,18 +285,14 @@ class ActiveLearningScoreGenerator:
         axs[1, 1].axis('off')
         fig.colorbar(im3, ax=axs[1, 1], fraction=0.046, pad=0.04)
 
-        # Bottom-right: All active regions binary mask (parametrized)
-        # You can change these parameters interactively or via function args
-        region_size = self.config.get('REGION_SIZE', 11)
-        mask_radius = self.config.get('MASK_RADIUS', None)
-        active_ratio = self.config.get('ACTIVE_RATIO', 0.01)
-        all_active_mask = self.get_all_active_regions_mask(scores_np, 
-                                                           region_size=region_size, 
-                                                           mask_radius=mask_radius, 
-                                                           active_ratio=active_ratio)
-        axs[1, 2].imshow(all_active_mask, cmap='gray', vmin=0, vmax=1)
-        axs[1, 2].set_title(f'All Active Regions\n(region_size={region_size}, mask_radius={mask_radius}, active_ratio={active_ratio})', fontsize=16)
-        axs[1, 2].axis('off')
+        # Bottom-right: All active regions binary mask
+        if active_mask is not None:
+            # Convert boolean mask to uint8 for visualization
+            mask_vis = active_mask.astype(np.uint8)
+            axs[1, 2].imshow(mask_vis, cmap='gray', vmin=0, vmax=1)
+            axs[1, 2].set_title('All selected regions', fontsize=16)
+        else:
+            axs[1, 2].axis('off')
 
         plt.tight_layout()
         if save_path:
@@ -278,13 +383,15 @@ class ActiveLearningScoreGenerator:
                                 batch_size=batch_size, 
                                 shuffle=False, 
                                 collate_fn=custom_collate)
-        results = []
-        
+
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="Generating scores"):
                 # Extract batch data
                 imgs = batch['inputs'].to(self.device)
-                gt_sem_seg = batch['gt_sem_seg'][0].data
+                origin_mask, origin_label, active_indicator, selected_indicator = \
+                    batch['origin_mask'], batch['origin_label'], \
+                    batch['active'], batch['selected']
+                gt_sem_seg = batch['gt_sem_seg'][0].data    # This is same as origin_label
                 img_metas = batch['metainfo']
                 
                 # Forward pass
@@ -296,38 +403,62 @@ class ActiveLearningScoreGenerator:
                 # Convert batch metainfo into a SegDataSample object
                 seg_data_sample = SegDataSample()
                 seg_data_sample.set_metainfo(batch['metainfo'][0])
-                segmentation_mask = self.model.postprocess_result(segmentation_logits, [seg_data_sample])
-
+                predicted_mask = self.model.postprocess_result(segmentation_logits, [seg_data_sample])
+                num_pixel_curr = imgs.shape[2] * imgs.shape[3]
+                active_regions = math.ceil(num_pixel_curr * self.active_ratio / self.per_region_pixels)
                 # Process each item in batch
-                for i, (feat, logits, meta) in enumerate(zip(features, segmentation_logits, img_metas)):
+                for i, (logits, meta) in enumerate(zip(segmentation_logits, img_metas)):
                     # Calculate floating region scores for this sample
                     scores, region_impurity_P, prediction_uncertainty_U = self.floating_score(logits.unsqueeze(0))
-                    # Visualization (optional, interactive)
-                    sample = dataset[i]
-                    img_path = sample['img_path']
-                    img = cv2.imread(img_path)
-                    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                    predicted_mask = segmentation_mask[i].pred_sem_seg.data.cpu().numpy()[0]
-                    region_impurity_np = region_impurity_P.cpu().numpy().squeeze()
-                    prediction_uncertainty_np = prediction_uncertainty_U.cpu().numpy().squeeze()
+                    predicted_mask = predicted_mask[i].pred_sem_seg.data.cpu().numpy()[0]
+                    region_impurity_P = region_impurity_P.cpu().numpy().squeeze()
+                    prediction_uncertainty_U = prediction_uncertainty_U.cpu().numpy().squeeze()
                     gt_mask_np = gt_sem_seg.cpu().numpy()[0] if gt_sem_seg is not None else None
-                    cont = self.visualize_results(scores, 
-                                                  predicted_mask, 
-                                                  region_impurity_np, 
-                                                  prediction_uncertainty_np, 
-                                                  gt_mask=gt_mask_np)
+                    
+                    # Set scores of already active regions to -inf
+                    scores[active_indicator[i]] = -float('inf')
+                    
+                    # Choose region selection method
+                    if hasattr(self, 'selection_mode') and self.selection_mode == 'threshold':
+                        if not hasattr(self, 'uncertainty_threshold') or self.uncertainty_threshold is None:
+                            raise ValueError("uncertainty_threshold must be set when using threshold selection mode")
+                        
+                        active_mask, active, selected = self.get_regions_above_threshold(
+                            scores=scores,
+                            groundtruth_mask=gt_mask_np,
+                            active_mask=origin_mask,
+                            threshold=self.uncertainty_threshold,
+                            active=active_indicator,
+                            selected=selected_indicator,
+                            max_regions=getattr(self, 'max_regions_per_image', None)
+                        )
+                    else:
+                        # Default: ratio-based selection (original method)
+                        active_mask, active, selected = self.get_all_active_regions_mask(
+                            scores=scores,
+                            groundtruth_mask=gt_mask_np,
+                            active_mask=origin_mask,
+                            active_regions=active_regions,
+                            active=active_indicator,
+                            selected=selected_indicator
+                        )
+                    curr_visualization = {
+                        # 'img_path': meta['img_path'],
+                        'scores': scores,
+                        'predicted_mask': predicted_mask,
+                        'region_impurity': region_impurity_P,
+                        'prediction_uncertainty': prediction_uncertainty_U,
+                        'gt_mask': gt_mask_np,
+                        'active_mask': active  # Convert to binary mask
+                    }
+                    cont = self.visualize_results(curr_visualization)
+                    indicator = {
+                        'active': active,
+                        'selected': selected,
+                    }
+                    # torch.save(indicator, os.path.join(batch['path_to_indicator'], meta['filename'][:-4] + '.pt'))
                     if cont is False:
                         break
-                    # Store result
-                    # result = {
-                    #     'img_path': meta.img_path,
-                    #     'avg_floating_score': torch.mean(scores).item(),
-                    #     'avg_region_impurity': torch.mean(region_impurity_P).item(),
-                    #     'avg_prediction_uncertainty': torch.mean(prediction_uncertainty_U).item()
-                    # }
-                    # results.append(result)
-        
-        return results
     
     def save_ranked_results(self, 
                            results: List[Dict],
@@ -422,12 +553,22 @@ def main():
     parser.add_argument('--region-size', type=int, default=5, help='Floating region size (region_size)')
     parser.add_argument('--mask-radius', type=int, default=None, help='Mask radius for region suppression (mask_radius, default: 2*region_size-1)')
     parser.add_argument('--active-ratio', type=float, default=0.01, help='Active ratio (fraction of image to select as regions, e.g. 0.01)')
+    parser.add_argument('--selection-mode', type=str, default='ratio', choices=['ratio', 'threshold'],
+                       help='Region selection mode: ratio (fixed number based on image size) or threshold (all regions above threshold)')
+    parser.add_argument('--uncertainty-threshold', type=float, default=None,
+                       help='Uncertainty threshold for threshold-based selection (required if selection-mode=threshold)')
+    parser.add_argument('--max-regions-per-image', type=int, default=None,
+                       help='Maximum regions per image (optional limit for threshold-based selection)')
     parser.add_argument('--format', type=str, default='json', choices=['json', 'csv'],
                        help='Output format')
     parser.add_argument('--sort-ascending', action='store_true',
                        help='Sort from lowest to highest score (default: highest to lowest)')
     
     args = parser.parse_args()
+    
+    # Validate arguments
+    if args.selection_mode == 'threshold' and args.uncertainty_threshold is None:
+        parser.error("--uncertainty-threshold is required when --selection-mode=threshold")
     
     # Load model
     print("Loading model...")
@@ -465,10 +606,34 @@ def main():
         num_classes=3,  # Background, Crop, Weed
         config=data_cfg
     )
-    # Set visualization parameters for region selection
-    # score_generator.region_size = args.region_size
-    # score_generator.mask_radius = args.mask_radius
-    # score_generator.active_ratio = args.active_ratio
+    
+    # Set selection parameters
+    score_generator.selection_mode = args.selection_mode
+    if args.selection_mode == 'threshold':
+        score_generator.uncertainty_threshold = args.uncertainty_threshold
+        score_generator.max_regions_per_image = args.max_regions_per_image
+    
+    # Override active ratio if provided
+    if args.active_ratio != 0.01:  # If user provided a different value
+        score_generator.active_ratio = args.active_ratio / 100
+    
+    # Print selection configuration
+    print(f"\nRegion Selection Configuration:")
+    print(f"Selection mode: {args.selection_mode}")
+    print(f"Region size (radius_K): {data_cfg['RADIUS_K']}")
+    print(f"Active radius: {score_generator.active_radius}")
+    print(f"Mask radius: {score_generator.mask_radius}")
+    
+    if args.selection_mode == 'ratio':
+        print(f"Active ratio: {score_generator.active_ratio:.4f}")
+        print(f"Regions per image (512x512): ~{math.ceil(512*512 * score_generator.active_ratio / score_generator.per_region_pixels)}")
+    else:
+        print(f"Uncertainty threshold: {args.uncertainty_threshold}")
+        if args.max_regions_per_image:
+            print(f"Max regions per image: {args.max_regions_per_image}")
+        else:
+            print("Max regions per image: unlimited")
+    print()
     
     # Generate scores
     print("Generating uncertainty scores...")

@@ -223,17 +223,17 @@ class ImageProcessor:
         
         # Convert to tensor
         img_tensor = torch.from_numpy(img.transpose(2, 0, 1)).unsqueeze(0).float()
-        
+        img_meta = dict()
         # Create metadata
-        img_meta = {
-            'img_shape': (h + pad_h, w + pad_w),
-            'ori_shape': (ori_h, ori_w),
-            'pad_shape': (h + pad_h, w + pad_w),
-            'padding_size': [0, pad_h, 0, pad_w],
-            'scale_factor': 1.0,
-            'flip': False,
-            'filename': os.path.basename(img_path)
-        }
+        img_meta.update(
+            img_shape=(h + pad_h, w + pad_w),
+            ori_shape=(ori_h, ori_w),
+            pad_shape=(h + pad_h, w + pad_w),
+            padding_size=[0, pad_h, 0, pad_w],
+            scale_factor=1.0,
+            flip=False,
+            filename=os.path.basename(img_path)
+        )
         
         return img_tensor, img_meta
     
