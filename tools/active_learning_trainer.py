@@ -76,13 +76,6 @@ class ActiveLearningScoreGenerator:
             in_channels=num_classes, 
             size=2*self.radius_K + 1
         ).to(device)
-        
-        # Initialize region selection parameters
-        self.region_size = 2*self.radius_K + 1
-        self.per_region_pixels = self.region_size ** 2
-        self.active_radius = self.radius_K
-        self.mask_radius = self.active_radius * 2
-        self.active_ratio = self.ratio / 10000  # Convert percentage to ratio
     
     def get_all_active_regions_mask(self, 
                                     scores: torch.Tensor,
@@ -383,6 +376,12 @@ class ActiveLearningScoreGenerator:
                                 batch_size=batch_size, 
                                 shuffle=False, 
                                 collate_fn=custom_collate)
+        
+        self.region_size = 2*self.config.get('RADIUS_K', 1)+1
+        self.per_region_pixels = self.region_size ** 2
+        self.active_radius = self.config.get('RADIUS_K', 1)
+        self.mask_radius = self.active_radius * 2
+        self.active_ratio = self.config.get('RATIO', 1) / 10000  # TODO What are these iterator values in offline AL mode.
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="Generating scores"):
