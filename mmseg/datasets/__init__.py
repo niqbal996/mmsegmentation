@@ -29,6 +29,7 @@ from .synapse import SynapseDataset
 from .phenobench_dataset import PhenobenchDataset, PhenobenchDatasetAL
 from .cropandweed_dataset import CropAndWeedDataset
 from .syclops_dataset import SyclopsDataset, SyclopsDatasetCS
+from .active_mixer import ActiveMixerDataset
 # yapf: disable
 from .transforms import (CLAHE, AdjustGamma, Albu, BioMedical3DPad,
                          BioMedical3DRandomCrop, BioMedical3DRandomFlip,
@@ -66,5 +67,5 @@ __all__ = [
     'NYUDataset', 'HSIDrive20Dataset', 
     'CropAndWeedDataset', 
     'SyclopsDataset', 'SyclopsDatasetCS',
-    'PhenobenchDataset', 'PhenobenchDatasetAL',
+    'PhenobenchDataset', 'PhenobenchDatasetAL', 'ActiveMixerDataset'
 ]
