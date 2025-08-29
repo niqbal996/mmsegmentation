@@ -86,8 +86,9 @@ class PhenobenchDatasetRegionBased(BaseSegDataset):
         palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]]
     )
 
-    def __init__(self, region_percentage=0.1, **kwargs):
+    def __init__(self, region_percentage=0.1, labelling_round=1, **kwargs):
         self.region_percentage = region_percentage
+        self.labelling_round = labelling_round
         super().__init__(
             img_suffix='.png',
             seg_map_suffix='.png',
@@ -130,12 +131,11 @@ class PhenobenchDatasetRegionBased(BaseSegDataset):
         img_info = dict(filename=img_path)
         seg_map = np.array(Image.open(seg_map_path))
         
-        
         # Convert class 3 to 1 (crop) and class 4 to 2 (weed)
         seg_map[seg_map == 3] = 1
         seg_map[seg_map == 4] = 2
-        
         img_info['gt_seg_map'] = seg_map
+        # img_info['active_seg_map'] = seg_map.copy().fill(255)  # Initialize active mask with 255 i.e. ignore all pixels
         return img_info
 
     def get_ann_info(self, idx):

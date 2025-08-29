@@ -66,6 +66,18 @@ class SegDataSample(BaseDataElement):
     @gt_sem_seg.deleter
     def gt_sem_seg(self) -> None:
         del self._gt_sem_seg
+        
+    @property
+    def active_sem_seg(self) -> PixelData:
+        return self._active_sem_seg
+
+    @active_sem_seg.setter
+    def active_sem_seg(self, value: PixelData) -> None:
+        self.set_field(value, '_active_sem_seg', dtype=PixelData)
+
+    @active_sem_seg.deleter
+    def active_sem_seg(self) -> None:
+        del self._active_sem_seg
 
     @property
     def pred_sem_seg(self) -> PixelData:

@@ -137,50 +137,51 @@ model = dict(
     train_cfg=dict(),
     test_cfg=dict(mode='whole'))
 
-source_train_pipeline = [
-    dict(type='LoadImageFromFile'),
-    dict(type='LoadAnnotations', reduce_zero_label=False),
-    dict(
-        type='RandomChoiceResize',
-        scales=[int(512 * x * 0.1) for x in range(5, 21)],
-        resize_type='ResizeShortestEdge',
-        max_size=2048),
-    dict(type='RandomCrop', crop_size=crop_size, cat_max_ratio=0.75),
-    dict(type='RandomFlip', prob=0.5),
-    dict(type='PhotoMetricDistortion'),
-    dict(type='PackSegInputs')
-]
-target_train_pipeline = [
-    dict(type='LoadImageFromFile'),
-    dict(type='LoadAnnotations'),
-    dict(type='PhenoBenchReduceClasses'),
-    dict(type='RandomResize', scale=(1024, 1024), ratio_range=(0.5, 2.0), keep_ratio=True),
-    dict(type='RandomCrop', crop_size=(512, 512), cat_max_ratio=0.75),
-    dict(type='RandomFlip', prob=0.5),
-    dict(type='PhotoMetricDistortion'),
-    dict(type='PackSegInputs')
-]
-test_pipeline = [
-    dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
-    dict(type='LoadAnnotations'),
-    dict(type='PhenoBenchReduceClasses'),
-    dict(type='PackSegInputs')
-]
-source_train_dataloader = dict(
-    batch_size=1,
-    dataset=dict(pipeline=source_train_pipeline)
-)
+# source_train_pipeline = [
+#     dict(type='LoadImageFromFile'),
+#     dict(type='LoadAnnotations', reduce_zero_label=False),
+#     dict(
+#         type='RandomChoiceResize',
+#         scales=[int(512 * x * 0.1) for x in range(5, 21)],
+#         resize_type='ResizeShortestEdge',
+#         max_size=2048),
+#     dict(type='RandomCrop', crop_size=crop_size, cat_max_ratio=0.75),
+#     dict(type='RandomFlip', prob=0.5),
+#     dict(type='PhotoMetricDistortion'),
+#     dict(type='PackSegInputs')
+# ]
+# target_train_pipeline = [
+#     dict(type='LoadImageFromFile'),
+#     dict(type='LoadAnnotations'),
+#     dict(type='PhenoBenchReduceClasses'),
+#     dict(type='ActiveMaskGenerator', percentage=0.2),
+#     dict(type='RandomResize', scale=(1024, 1024), ratio_range=(0.5, 2.0), keep_ratio=True),
+#     dict(type='RandomCrop', crop_size=(512, 512), cat_max_ratio=0.75),
+#     dict(type='RandomFlip', prob=0.5),
+#     dict(type='PhotoMetricDistortion'),
+#     dict(type='PackSegInputs')
+# ]
+# test_pipeline = [
+#     dict(type='LoadImageFromFile'),
+#     dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
+#     dict(type='LoadAnnotations'),
+#     dict(type='PhenoBenchReduceClasses'),
+#     dict(type='PackSegInputs')
+# ]
+# source_train_dataloader = dict(
+#     batch_size=1,
+#     dataset=dict(pipeline=source_train_pipeline)
+# )
 
-target_train_dataloader = dict(
-    batch_size=1,
-    dataset=dict(pipeline=target_train_pipeline)
-)
+# target_train_dataloader = dict(
+#     batch_size=1,
+#     dataset=dict(pipeline=target_train_pipeline)
+# )
 
-val_dataloader = dict(
-    batch_size=1,
-    num_workers=1,
-)
+# val_dataloader = dict(
+#     batch_size=1,
+#     num_workers=1,
+# )
 # optimizer
 embed_multi = dict(lr_mult=1.0, decay_mult=0.0)
 optimizer = dict(
@@ -210,7 +211,7 @@ param_scheduler = [
 
 # training schedule for 160k
 train_cfg = dict(
-    type='IterBasedActiveTrainLoop', max_iters=30000, val_interval=1000, region_label_interval=2)
+    type='IterBasedActiveTrainLoop', max_iters=30000, val_interval=500, region_label_interval=2000)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 default_hooks = dict(
@@ -221,10 +222,7 @@ default_hooks = dict(
         type='CheckpointHook', by_epoch=False, interval=2000,
         max_keep_ckpts=1,
         save_best='mIoU'),
-    region_label_hook=dict(type='RegionLabelHook', label_budget=2, region_size=11, selection_mode='ratio', uncertainty_threshold=0.5),
+    region_label_hook=dict(type='RegionLabelHook', label_budget_per_round=1, region_size=11, selection_mode='ratio', uncertainty_threshold=0.5),
     sampler_seed=dict(type='DistSamplerSeedHook'),
     visualization=dict(type='SegVisualizationHook'))
 auto_scale_lr = dict(enable=False, base_batch_size=16)
-# custom_hooks = dict(
-#     region_label_hook=dict(type='RegionLabelHook', label_budget=2, region_size=11, selection_mode='ratio', uncertainty_threshold=0.5),
-# )

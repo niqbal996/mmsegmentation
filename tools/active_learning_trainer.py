@@ -76,6 +76,13 @@ class ActiveLearningScoreGenerator:
             in_channels=num_classes, 
             size=2*self.radius_K + 1
         ).to(device)
+        
+        # Initialize region selection parameters
+        self.region_size = 2*self.radius_K + 1
+        self.per_region_pixels = self.region_size ** 2
+        self.active_radius = self.radius_K
+        self.mask_radius = self.active_radius * 2
+        self.active_ratio = self.ratio / 100  # Convert percentage to ratio
     
     def get_all_active_regions_mask(self, 
                                     scores: torch.Tensor,
@@ -235,6 +242,7 @@ class ActiveLearningScoreGenerator:
         predicted_mask = mask_dict.get('predicted_mask')
         region_impurity = mask_dict.get('region_impurity')
         prediction_uncertainty = mask_dict.get('prediction_uncertainty')
+        prediction_uncertainty = prediction_uncertainty.cpu().numpy().squeeze() if isinstance(prediction_uncertainty, torch.Tensor) else prediction_uncertainty
         gt_mask = mask_dict.get('gt_mask')
         active_mask = mask_dict.get('active_mask')
 
@@ -411,7 +419,7 @@ class ActiveLearningScoreGenerator:
                     scores, region_impurity_P, prediction_uncertainty_U = self.floating_score(logits.unsqueeze(0))
                     predicted_mask = predicted_mask[i].pred_sem_seg.data.cpu().numpy()[0]
                     region_impurity_P = region_impurity_P.cpu().numpy().squeeze()
-                    prediction_uncertainty_U = prediction_uncertainty_U.cpu().numpy().squeeze()
+                    # prediction_uncertainty_U = prediction_uncertainty_U.cpu().numpy().squeeze()
                     gt_mask_np = gt_sem_seg.cpu().numpy()[0] if gt_sem_seg is not None else None
                     
                     # Set scores of already active regions to -inf

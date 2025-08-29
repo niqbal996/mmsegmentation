@@ -1,11 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import copy
 import inspect
+import os
 import warnings
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import cv2
 import mmcv
+import os.path as osp
 import mmengine
 import numpy as np
 from mmcv.transforms import RandomFlip as MMCV_RandomFlip
@@ -2670,4 +2672,112 @@ class SugarbeetFine_2Phenobench(object):
         seg_map[results['gt_seg_map'] == 22] = 2
 
         results['gt_seg_map'] = seg_map
+        return results
+
+@TRANSFORMS.register_module()
+class ActiveMaskGenerator(BaseTransform):
+    """Generate dynamic active labels based on current training state """
+    def get_active_label_path(self, orig_label_path, active_round, label_budget):
+        """Get the path to active labels for current round"""
+        if active_round == 0:
+            return None  # No active labels for round 0
+        
+        orig_label_dir = osp.dirname(orig_label_path)
+        img_name = osp.basename(orig_label_path)
+        
+        # Use integer percentage for directory naming
+        budget_int = int(label_budget * 100) if label_budget < 1.0 else int(label_budget)
+        active_label_dir = osp.join(osp.dirname(orig_label_dir), f'semantics_{budget_int}')
+        active_label_path = osp.join(active_label_dir, img_name)
+        
+        return active_label_path if osp.exists(active_label_path) else None
+
+    def _load_active_state(self, state_path):
+        # Efficiently load and cache the active state file
+        if not hasattr(self, '_last_state_mtime'):
+            self._last_state_mtime = None
+            self._active_round = 0
+            self._label_budget = 0.0
+        try:
+            mtime = os.path.getmtime(state_path)
+            if self._last_state_mtime != mtime:
+                with open(state_path, 'r') as f:
+                    lines = f.readlines()
+                    self._active_round = int(lines[0].strip())
+                    self._label_budget = float(lines[1].strip())
+                self._last_state_mtime = mtime
+        except Exception as e:
+            # If file missing or unreadable, fallback to defaults
+            self._active_round = 0
+            self._label_budget = 0.0
+
+    def transform(self, results: dict) -> dict:
+        """Call function to generate active mask.
+
+        Args:
+            results (dict): Result dict from :obj:`mmseg.CustomDataset`.
+
+        Returns:
+            dict: The dict contains active segmentation annotations.
+        """
+        # Determine the state file path (assume same parent as label dir)
+        orig_seg_path = results.get('seg_map_path', '')
+        orig_label_dir = osp.dirname(orig_seg_path)
+        state_path = osp.join(osp.dirname(orig_label_dir), 'active_state.txt')
+        if osp.exists(state_path):
+            self._load_active_state(state_path)
+        active_round = getattr(self, '_active_round', 0)
+        label_budget = getattr(self, '_label_budget', 0.0)
+
+        # Store original ground truth
+        original_gt = results['gt_seg_map'].copy()
+        
+        if active_round == 0:
+            # For round 0, set all pixels to ignore (255)
+            active_mask = np.full_like(results['gt_seg_map'], 255, dtype=np.uint8)
+        else:
+            # Try to load active labels from the current active directory
+            active_label_path = self.get_active_label_path(orig_seg_path, active_round, label_budget)
+            if active_label_path:
+                # Load active labels from disk
+                try:
+                    active_mask = cv2.imread(active_label_path, cv2.IMREAD_UNCHANGED)
+                    if active_mask is None:
+                        # Fallback to mmcv imread
+                        import mmcv
+                        active_mask = mmcv.imread(active_label_path, flag='unchanged')
+                    # Ensure the mask has the right shape and type
+                    if active_mask.ndim == 3:
+                        active_mask = active_mask[:, :, 0]  # Take first channel if RGB
+                    active_mask = active_mask.astype(np.uint8)
+                except Exception as e:
+                    print(f"[ActiveMaskGenerator] Error loading {active_label_path}: {e}")
+                    active_mask = np.full_like(results['gt_seg_map'], 255, dtype=np.uint8)
+            else:
+                # Fallback: all pixels ignored if active label doesn't exist
+                active_mask = np.full_like(results['gt_seg_map'], 255, dtype=np.uint8)
+                print(f"[ActiveMaskGenerator] No active labels found for round {active_round}, setting all pixels to ignore")
+        
+        # Store both original and active ground truth in results
+        results['gt_seg_map_original'] = original_gt  # Keep original for reference
+        results['gt_seg_map'] = active_mask.astype(np.uint8)  # Use active mask for training
+        
+        return results
+    
+@TRANSFORMS.register_module()
+class CurrentActiveRound(BaseTransform):
+    
+    def __init__(self):
+        self.active_round = 0
+
+    def transform(self, results: dict) -> dict:
+        """Call function to reduce classes.
+
+        Args:
+            results (dict): Result dict from :obj:`mmseg.CustomDataset`.
+
+        Returns:
+            dict: add active_round value to indicate which labelling round is currently going on
+        """ 
+        results['active_round'] = self.active_round
         return results

@@ -1,7 +1,7 @@
 # dataset settings
 import os
 dataset_type_train = 'SyclopsDataset'
-dataset_type_val = 'PhenobenchDataset'
+dataset_type_val = 'PhenobenchDatasetRegionBased'
 
 data_root_train = '/mnt/e/datasets/sugarbeet_syn_v6'
 data_root_val = '/mnt/e/datasets/phenobench'
@@ -24,9 +24,11 @@ source_train_pipeline = [
     dict(type='PackSegInputs')
 ]
 target_train_pipeline = [
+    dict(type='CurrentActiveRound'),
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations'),
     dict(type='PhenoBenchReduceClasses'),
+    dict(type='ActiveMaskGenerator'),
     dict(type='RandomResize', scale=(1024, 1024), ratio_range=(0.5, 2.0), keep_ratio=True),
     dict(type='RandomCrop', crop_size=(512, 512), cat_max_ratio=0.75),
     dict(type='RandomFlip', prob=0.5),

@@ -7,6 +7,8 @@ import os.path as osp
 from mmengine.config import Config, DictAction
 from mmengine.logging import print_log
 from mmengine.runner import Runner
+from mmseg.utils import register_all_modules
+register_all_modules()
 
 from mmseg.registry import RUNNERS
 
