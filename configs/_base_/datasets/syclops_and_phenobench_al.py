@@ -1,7 +1,8 @@
 # dataset settings
 import os
 dataset_type_train = 'SyclopsDataset'
-dataset_type_val = 'PhenobenchDatasetRegionBased'
+dataset_type_val = 'PhenobenchDataset'
+dataset_type_active = 'PhenobenchDatasetRegionBased'
 
 data_root_train = '/mnt/e/datasets/sugarbeet_syn_v6'
 data_root_val = '/mnt/e/datasets/phenobench'
@@ -28,11 +29,20 @@ target_train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations'),
     dict(type='PhenoBenchReduceClasses'),
-    dict(type='ActiveMaskGenerator'),
+    # dict(type='ActiveMaskGenerator'),
     dict(type='RandomResize', scale=(1024, 1024), ratio_range=(0.5, 2.0), keep_ratio=True),
     dict(type='RandomCrop', crop_size=(512, 512), cat_max_ratio=0.75),
     dict(type='RandomFlip', prob=0.5),
     dict(type='PhotoMetricDistortion'),
+    dict(type='PackSegInputs')
+]
+
+target_active_pipeline = [
+    dict(type='LoadImageFromFile'),
+    dict(type='LoadAnnotations'),
+    dict(type='LoadActiveMask', active_mask_path='semantics_active_mask', active_indicator_path='semantics_active_indicator'),
+    # dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
+    dict(type='PhenoBenchReduceClasses'),
     dict(type='PackSegInputs')
 ]
 test_pipeline = [
@@ -59,7 +69,6 @@ source_train_dataloader = dict(
             seg_map_path='main_camera_annotations/semantics'),
         pipeline=source_train_pipeline))
 
-# TODO Target has to also actively sample. For now, this is just fully supervised. No active part. 
 target_train_dataloader = dict(
     batch_size=1,
     num_workers=1,
@@ -76,10 +85,25 @@ target_train_dataloader = dict(
             seg_map_path='train/semantics'),
         pipeline=target_train_pipeline))
 
+target_active_dataloader = dict(
+    batch_size=1,
+    num_workers=1,
+    persistent_workers=True,
+    sampler=dict(type='DefaultSampler', shuffle=False),
+    dataset=dict(
+        type=dataset_type_active,
+        data_root=data_root_val,
+        metainfo=dataset_meta,
+        data_prefix=dict(
+            img_path='train/images',
+            seg_map_path='train/semantics'),
+        pipeline=target_active_pipeline)
+    )
+
 train_dataloader = dict(
     dataloader_source=source_train_dataloader,
     dataloader_target=target_train_dataloader,
-    # Optionally add more dataloaders here
+    dataloader_active=target_active_dataloader
 )
 val_dataloader = dict(
     batch_size=1,

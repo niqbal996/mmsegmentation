@@ -2,7 +2,7 @@
 from .formatting import PackSegInputs
 from .loading import (LoadAnnotations, LoadBiomedicalAnnotation,
                       LoadBiomedicalData, LoadBiomedicalImageFromFile,
-                      LoadDepthAnnotation, LoadImageFromNDArray,
+                      LoadDepthAnnotation, LoadImageFromNDArray, LoadActiveMask,
                       LoadMultipleRSImageFromFile, LoadSingleRSImageFromFile)
 # yapf: disable
 from .transforms import (CLAHE, AdjustGamma, Albu, BioMedical3DPad,
@@ -24,7 +24,7 @@ __all__ = [
     'PhotoMetricDistortion', 'RandomRotate', 'AdjustGamma', 'CLAHE', 'Rerange',
     'RGB2Gray', 'RandomCutOut', 'RandomMosaic', 'PackSegInputs',
     'ResizeToMultiple', 'LoadImageFromNDArray', 'LoadBiomedicalImageFromFile',
-    'LoadBiomedicalAnnotation', 'LoadBiomedicalData', 'GenerateEdge',
+    'LoadBiomedicalAnnotation', 'LoadBiomedicalData', 'LoadActiveMask', 'GenerateEdge',
     'ResizeShortestEdge', 'BioMedicalGaussianNoise', 'BioMedicalGaussianBlur',
     'BioMedical3DRandomFlip', 'BioMedicalRandomGamma', 'BioMedical3DPad',
     'RandomRotFlip', 'Albu', 'LoadSingleRSImageFromFile', 'ConcatCDInput',

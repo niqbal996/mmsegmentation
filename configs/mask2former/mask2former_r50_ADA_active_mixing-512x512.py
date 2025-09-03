@@ -29,7 +29,7 @@ model = dict(
         style='pytorch',
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
     decode_head=dict(
-        type='Mask2FormerHead',
+        type='Mask2FormerHeadADA',
         in_channels=[256, 512, 1024, 2048],
         strides=[4, 8, 16, 32],
         feat_channels=256,
@@ -115,6 +115,15 @@ model = dict(
             naive_dice=True,
             eps=1.0,
             loss_weight=5.0),
+        loss_local_consistent=dict(
+            type='mmseg.LocalConsistentLoss',
+            in_channels=num_classes,    # background, crop, weed excluding 255? 
+            l_type='l1',
+            loss_weight=5.0),
+        loss_negative_learning=dict(
+            type='mmseg.NegativeLearningLoss',
+            threshold=0.5,      # Threshold for negative loss
+            loss_weight=5.0), 
         train_cfg=dict(
             num_points=12544,
             oversample_ratio=3.0,
@@ -137,51 +146,6 @@ model = dict(
     train_cfg=dict(),
     test_cfg=dict(mode='whole'))
 
-# source_train_pipeline = [
-#     dict(type='LoadImageFromFile'),
-#     dict(type='LoadAnnotations', reduce_zero_label=False),
-#     dict(
-#         type='RandomChoiceResize',
-#         scales=[int(512 * x * 0.1) for x in range(5, 21)],
-#         resize_type='ResizeShortestEdge',
-#         max_size=2048),
-#     dict(type='RandomCrop', crop_size=crop_size, cat_max_ratio=0.75),
-#     dict(type='RandomFlip', prob=0.5),
-#     dict(type='PhotoMetricDistortion'),
-#     dict(type='PackSegInputs')
-# ]
-# target_train_pipeline = [
-#     dict(type='LoadImageFromFile'),
-#     dict(type='LoadAnnotations'),
-#     dict(type='PhenoBenchReduceClasses'),
-#     dict(type='ActiveMaskGenerator', percentage=0.2),
-#     dict(type='RandomResize', scale=(1024, 1024), ratio_range=(0.5, 2.0), keep_ratio=True),
-#     dict(type='RandomCrop', crop_size=(512, 512), cat_max_ratio=0.75),
-#     dict(type='RandomFlip', prob=0.5),
-#     dict(type='PhotoMetricDistortion'),
-#     dict(type='PackSegInputs')
-# ]
-# test_pipeline = [
-#     dict(type='LoadImageFromFile'),
-#     dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
-#     dict(type='LoadAnnotations'),
-#     dict(type='PhenoBenchReduceClasses'),
-#     dict(type='PackSegInputs')
-# ]
-# source_train_dataloader = dict(
-#     batch_size=1,
-#     dataset=dict(pipeline=source_train_pipeline)
-# )
-
-# target_train_dataloader = dict(
-#     batch_size=1,
-#     dataset=dict(pipeline=target_train_pipeline)
-# )
-
-# val_dataloader = dict(
-#     batch_size=1,
-#     num_workers=1,
-# )
 # optimizer
 embed_multi = dict(lr_mult=1.0, decay_mult=0.0)
 optimizer = dict(
@@ -211,7 +175,7 @@ param_scheduler = [
 
 # training schedule for 160k
 train_cfg = dict(
-    type='IterBasedActiveTrainLoop', max_iters=30000, val_interval=500, region_label_interval=2000)
+    type='IterBasedActiveTrainLoop', max_iters=30000, val_interval=500, region_label_interval=4)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 default_hooks = dict(
@@ -222,7 +186,7 @@ default_hooks = dict(
         type='CheckpointHook', by_epoch=False, interval=1000,
         max_keep_ckpts=1,
         save_best='mIoU'),
-    region_label_hook=dict(type='RegionLabelHook', label_budget_per_round=1, region_size=11, selection_mode='uncertainty', uncertainty_threshold=0.5),
+    region_label_hook=dict(type='RegionLabelHook', label_budget_per_round=1, region_size=11, selection_mode='ratio', uncertainty_threshold=0.2),
     sampler_seed=dict(type='DistSamplerSeedHook'),
     visualization=dict(type='SegVisualizationHook'))
 auto_scale_lr = dict(enable=False, base_batch_size=16)

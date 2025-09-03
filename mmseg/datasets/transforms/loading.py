@@ -2,13 +2,15 @@
 import warnings
 from pathlib import Path
 from typing import Dict, Optional, Union
-
+import os.path as osp
+import torch
 import mmcv
 import mmengine.fileio as fileio
 import numpy as np
 from mmcv.transforms import BaseTransform
 from mmcv.transforms import LoadAnnotations as MMCV_LoadAnnotations
 from mmcv.transforms import LoadImageFromFile
+from PIL import Image
 
 from mmseg.registry import TRANSFORMS
 from mmseg.utils import datafrombytes
@@ -18,6 +20,65 @@ try:
 except ImportError:
     gdal = None
 
+@TRANSFORMS.register_module()
+class LoadActiveMask(BaseTransform):
+    """Load the active learning mask for a single image.
+
+    This transform loads a single-channel active mask. If the mask file does
+    not exist for a given sample (e.g., before the first round of active
+    learning), it creates a placeholder mask of zeros with the same shape as
+    the ground truth segmentation map.
+
+    Required Keys:
+    - active_mask_path (str): Path to the active mask file.
+    - gt_seg_map (np.ndarray): The ground truth segmentation map, used to
+      determine the shape of the placeholder if the active mask is not found.
+
+    Added Keys:
+    - gt_active_mask (np.ndarray): The loaded or created active mask.
+    """
+    def __init__(self, active_mask_path:str, active_indicator_path:str):
+        super().__init__()
+        self.active_mask_path = active_mask_path
+        self.active_indicator_path = active_indicator_path
+
+    def transform(self, results: Dict) -> Dict:
+        """
+        Args:
+            results (dict): The result dict from the previous transform.
+
+        Returns:
+            dict: The result dict updated with the active mask.
+        """
+        active_mask_path = results.get('active_mask_path')
+        active_indicator_path = results.get('active_indicator_path')[:-4]+'.pth'
+        if active_mask_path and osp.exists(active_mask_path):
+            # Load the mask if it exists
+            active_mask = np.array(Image.open(active_mask_path), dtype=np.uint8)
+        else:
+            # If the mask does not exist, create a placeholder of zeros
+            # with the same shape as the ground truth map.
+            h, w = results['gt_seg_map'].shape[:2]
+            active_mask = np.zeros((h, w), dtype=np.uint8)
+
+        if active_indicator_path and osp.exists(active_indicator_path):
+            # Load the indicator if it exists
+            indicator = torch.load(active_indicator_path)
+        else:
+            # If the indicator does not exist, create a placeholder of zeros
+            # with the same shape as the ground truth map.
+            h, w = results['gt_seg_map'].shape[:2]
+            active_indicator = np.zeros((h, w), dtype=np.uint8)
+
+        results['gt_active_mask'] = active_mask
+        results['gt_active_indicator'] = active_indicator
+        # Also add the key to seg_fields so that mmseg handles it correctly
+        # during formatting and collation.
+        if 'seg_fields' not in results:
+            results['seg_fields'] = []
+        results['seg_fields'].append('gt_active_mask')
+
+        return results
 
 @TRANSFORMS.register_module()
 class LoadAnnotations(MMCV_LoadAnnotations):
