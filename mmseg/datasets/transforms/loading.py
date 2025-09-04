@@ -51,19 +51,20 @@ class LoadActiveMask(BaseTransform):
             dict: The result dict updated with the active mask.
         """
         active_mask_path = results.get('active_mask_path')
-        active_indicator_path = results.get('active_indicator_path')[:-4]+'.pth'
+        active_indicator_path = results.get('active_indicator_path')
         if active_mask_path and osp.exists(active_mask_path):
             # Load the mask if it exists
             active_mask = np.array(Image.open(active_mask_path), dtype=np.uint8)
-        # else:
-        #     # If the mask does not exist, create a placeholder of zeros
-        #     # with the same shape as the ground truth map.
-        #     h, w = results['gt_seg_map'].shape[:2]
-        #     active_mask = np.zeros((h, w), dtype=np.uint8)
+        else:
+            # If the mask does not exist, create a placeholder of zeros
+            # with the same shape as the ground truth map.
+            h, w = results['gt_seg_map'].shape[:2]
+            active_mask = np.zeros((h, w), dtype=np.uint8)
         # active_selected should have all pixels true that have been selected for active labelling so far. 
         # active_indicator should have all pixels true that are selected right now in the current active round. 
         
         if active_indicator_path and osp.exists(active_indicator_path):
+            active_indicator_path = active_indicator_path[:-4]+'.pth'
             # Load the indicator if it exists
             indicator = torch.load(active_indicator_path)
             active_indicator = indicator.get('active')
@@ -72,13 +73,12 @@ class LoadActiveMask(BaseTransform):
                 active_indicator = torch.zeros_like(torch.tensor(results['gt_seg_map']), dtype=torch.bool)
                 active_selected = torch.zeros_like(torch.tensor(results['gt_seg_map']), dtype=torch.bool)
         else:
-            # If the indicator does not exist, create a placeholder of zeros
-            # with the same shape as the ground truth map.
+            # If the indicator does not exist, create it and save them in the given folder. This happens once at the beginning. 
             h, w = results['gt_seg_map'].shape[:2]
             active_indicator = torch.ones((h, w), dtype=torch.bool) * False
+            active_selected = torch.ones((h, w), dtype=torch.bool) * False
         # TODO What is the difference between active_mask, active_indicator, active_selected?
         results['gt_active_mask'] = active_mask
-        # results['gt_active_indicator'] = active_indicator
         results['active_indicator'] = active_indicator
         results['selected'] = active_selected
         # Also add the key to seg_fields so that mmseg handles it correctly
