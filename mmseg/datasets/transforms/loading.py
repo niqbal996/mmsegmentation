@@ -83,6 +83,8 @@ class LoadActiveMask(BaseTransform):
         results['selected'] = active_selected
         # Also add the key to seg_fields so that mmseg handles it correctly
         # during formatting and collation.
+        # Copy the active mask into gt_seg_map
+        results['gt_seg_map'] = results['gt_active_mask'].copy()
         if 'seg_fields' not in results:
             results['seg_fields'] = []
         results['seg_fields'].append('gt_active_mask')

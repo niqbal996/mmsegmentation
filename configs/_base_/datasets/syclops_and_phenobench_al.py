@@ -1,7 +1,7 @@
 # dataset settings
 import os
 dataset_type_train = 'SyclopsDataset'
-dataset_type_val = 'PhenobenchDataset'
+dataset_type_val = 'PhenobenchDatasetRegionBased'
 dataset_type_active = 'PhenobenchDatasetRegionBased'
 
 data_root_train = '/mnt/e/datasets/sugarbeet_syn_v6'
@@ -29,7 +29,7 @@ target_train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations'),
     dict(type='PhenoBenchReduceClasses'),
-    # dict(type='ActiveMaskGenerator'),
+    dict(type='LoadActiveMask', active_mask_path='semantics_active_mask', active_indicator_path='semantics_active_indicator'),
     dict(type='RandomResize', scale=(1024, 1024), ratio_range=(0.5, 2.0), keep_ratio=True),
     dict(type='RandomCrop', crop_size=(512, 512), cat_max_ratio=0.75),
     dict(type='RandomFlip', prob=0.5),
@@ -40,9 +40,8 @@ target_train_pipeline = [
 target_active_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations'),
-    dict(type='LoadActiveMask', active_mask_path='semantics_active_mask', active_indicator_path='semantics_active_indicator'),
-    # dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
     dict(type='PhenoBenchReduceClasses'),
+    dict(type='LoadActiveMask', active_mask_path='semantics_active_mask', active_indicator_path='semantics_active_indicator'),
     dict(type='PackSegInputs', meta_keys=('img_path', 'seg_map_path', 'ori_shape',
                             'img_shape', 'pad_shape', 'scale_factor', 'flip',
                             'flip_direction', 'reduce_zero_label', 'active_mask_path', 'active_indicator_path'))
@@ -64,8 +63,6 @@ source_train_dataloader = dict(
         type=dataset_type_train,
         data_root=data_root_train,
         metainfo=dataset_meta,
-        # subset_ratio=dataset_meta['subset_ratio'],
-        # seed=dataset_meta['seed'],
         data_prefix=dict(
             img_path='main_camera/rect',
             seg_map_path='main_camera_annotations/semantics'),
@@ -80,8 +77,6 @@ target_train_dataloader = dict(
         type=dataset_type_val,
         data_root=data_root_val,
         metainfo=dataset_meta,
-        # subset_ratio=dataset_meta['subset_ratio'],
-        # seed=dataset_meta['seed'],
         data_prefix=dict(
             img_path='train/images',
             seg_map_path='train/semantics'),
