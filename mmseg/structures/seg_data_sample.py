@@ -68,16 +68,40 @@ class SegDataSample(BaseDataElement):
         del self._gt_sem_seg
         
     @property
-    def active_sem_seg(self) -> PixelData:
-        return self._active_sem_seg
+    def active_mask(self) -> PixelData:
+        return self._active_mask
 
-    @active_sem_seg.setter
-    def active_sem_seg(self, value: PixelData) -> None:
-        self.set_field(value, '_active_sem_seg', dtype=PixelData)
+    @active_mask.setter
+    def active_mask(self, value: PixelData) -> None:
+        self.set_field(value, '_active_mask', dtype=PixelData)
 
-    @active_sem_seg.deleter
-    def active_sem_seg(self) -> None:
-        del self._active_sem_seg
+    @active_mask.deleter
+    def active_mask(self) -> None:
+        del self._active_mask
+        
+    @property
+    def active_selected(self) -> PixelData:
+        return self._active_selected
+
+    @active_selected.setter
+    def active_selected(self, value: PixelData) -> None:
+        self.set_field(value, '_active_selected', dtype=PixelData)
+
+    @active_selected.deleter
+    def active_selected(self) -> None:
+        del self._active_selected
+        
+    @property
+    def active_indicator(self) -> PixelData:
+        return self._active_indicator
+
+    @active_indicator.setter
+    def active_indicator(self, value: PixelData) -> None:
+        self.set_field(value, '_active_indicator', dtype=PixelData)
+
+    @active_indicator.deleter
+    def active_indicator(self) -> None:
+        del self._active_indicator
 
     @property
     def pred_sem_seg(self) -> PixelData:

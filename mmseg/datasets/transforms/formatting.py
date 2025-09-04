@@ -97,11 +97,17 @@ class PackSegInputs(BaseTransform):
                 data=to_tensor(results['gt_depth_map'][None, ...]))
             data_sample.set_data(dict(gt_depth_map=PixelData(**gt_depth_data)))
 
-        if 'active_seg_map' in results:
-            active_seg_data = dict(
-                data=to_tensor(results['active_seg_map'][None, ...]))
-            data_sample.active_sem_seg = PixelData(**active_seg_data)
-
+        if 'gt_active_mask' in results:
+            active_mask_data = dict(
+                data=to_tensor(results['gt_active_mask'][None, ...]))
+            data_sample.active_mask = PixelData(**active_mask_data)
+            active_indicator_data = dict(
+                data=to_tensor(results['active_indicator'][None, ...]))
+            data_sample.active_indicator = PixelData(**active_indicator_data)
+            selected_data = dict(
+                data=to_tensor(results['selected'][None, ...]))
+            data_sample.active_selected = PixelData(**selected_data)
+            
         img_meta = {}
         for key in self.meta_keys:
             if key in results:

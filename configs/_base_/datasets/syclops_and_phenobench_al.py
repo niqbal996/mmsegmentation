@@ -43,7 +43,9 @@ target_active_pipeline = [
     dict(type='LoadActiveMask', active_mask_path='semantics_active_mask', active_indicator_path='semantics_active_indicator'),
     # dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
     dict(type='PhenoBenchReduceClasses'),
-    dict(type='PackSegInputs')
+    dict(type='PackSegInputs', meta_keys=('img_path', 'seg_map_path', 'ori_shape',
+                            'img_shape', 'pad_shape', 'scale_factor', 'flip',
+                            'flip_direction', 'reduce_zero_label', 'active_mask_path', 'active_indicator_path'))
 ]
 test_pipeline = [
     dict(type='LoadImageFromFile'),

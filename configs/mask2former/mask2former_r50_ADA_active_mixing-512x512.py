@@ -175,7 +175,7 @@ param_scheduler = [
 
 # training schedule for 160k
 train_cfg = dict(
-    type='IterBasedActiveTrainLoop', max_iters=30000, val_interval=500, region_label_interval=4)
+    type='IterBasedActiveTrainLoop', max_iters=30000, val_interval=500, region_label_interval=1000)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 default_hooks = dict(
@@ -186,7 +186,7 @@ default_hooks = dict(
         type='CheckpointHook', by_epoch=False, interval=1000,
         max_keep_ckpts=1,
         save_best='mIoU'),
-    region_label_hook=dict(type='RegionLabelHook', label_budget_per_round=1, region_size=11, selection_mode='ratio', uncertainty_threshold=0.2),
+    region_label_hook=dict(type='RegionLabelHook', label_budget_per_round=1, region_size=11, selection_mode='region_selection', uncertainty_threshold=0.2),
     sampler_seed=dict(type='DistSamplerSeedHook'),
     visualization=dict(type='SegVisualizationHook'))
 auto_scale_lr = dict(enable=False, base_batch_size=16)
