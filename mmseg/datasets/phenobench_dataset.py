@@ -104,7 +104,7 @@ class PhenobenchDatasetRegionBased(BaseSegDataset):
             data_info['reduce_zero_label'] = False
             data_info['seg_fields'] = []
             data_info['active_mask_path'] = osp.join(active_mask_dir, img)
-            data_info['active_indicator_path'] = osp.join(active_indicator_dir, img)
+            data_info['active_indicator_path'] = osp.join(active_indicator_dir, img[:-4]+'.pth')
             data_list.append(data_info)
 
         return data_list

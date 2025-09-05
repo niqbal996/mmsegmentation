@@ -59,12 +59,12 @@ class LoadActiveMask(BaseTransform):
             # If the mask does not exist, create a placeholder of zeros
             # with the same shape as the ground truth map.
             h, w = results['gt_seg_map'].shape[:2]
-            active_mask = np.zeros((h, w), dtype=np.uint8)
+            active_mask = np.ones((h, w), dtype=np.uint8) * 255
         # active_selected should have all pixels true that have been selected for active labelling so far. 
         # active_indicator should have all pixels true that are selected right now in the current active round. 
         
         if active_indicator_path and osp.exists(active_indicator_path):
-            active_indicator_path = active_indicator_path[:-4]+'.pth'
+            # active_indicator_path = active_indicator_path[:-4]+'.pth'
             # Load the indicator if it exists
             indicator = torch.load(active_indicator_path)
             active_indicator = indicator.get('active')
@@ -84,7 +84,12 @@ class LoadActiveMask(BaseTransform):
         # Also add the key to seg_fields so that mmseg handles it correctly
         # during formatting and collation.
         # Copy the active mask into gt_seg_map
-        results['gt_seg_map'] = results['gt_active_mask'].copy()
+        # If the active ground truth label is saved from previous runs with active labels used that.
+        # results['gt_seg_map'] = results['gt_active_mask'].copy()
+        # Replace the values not in the active_indicator with 255 to be ignored. 
+        # results['gt_seg_map'][~active_indicator] = 255
+        if torch.any(active_indicator):
+            results['gt_seg_map'] = results['gt_active_mask'].copy()
         if 'seg_fields' not in results:
             results['seg_fields'] = []
         results['seg_fields'].append('gt_active_mask')
