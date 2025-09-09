@@ -8,12 +8,55 @@ from mmengine import fileio
 
 @DATASETS.register_module()
 class CropAndWeedDataset(BaseSegDataset):
-    METAINFO = dict(
-        classes=('background', 'sugarbeet', 'weed'),
-        palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]]
-    )
+    # Define METAINFO dict using classes and palette from DATASETS dict
+    METAINFO = {
+        'classes': [
+            'Soil', 'Maize', 'Maize two-leaf stage', 'Maize four-leaf stage', 'Maize six-leaf stage',
+            'Maize eight-leaf stage', 'Maize max', 'Sugar beet', 'Sugar beet two-leaf stage',
+            'Sugar beet four-leaf stage', 'Sugar beet six-leaf stage', 'Sugar beet eight-leaf stage',
+            'Sugar beet Max', 'Pea', 'Courgette', 'Pumpkins', 'Radish', 'Asparagus', 'Potato',
+            'Flat leaf parsley', 'Curly leaf parsley', 'Cowslip', 'Poppy', 'Hemp', 'Sunflower',
+            'Sage', 'Common bean', 'Faba bean', 'Clover', 'Hybrid goosefoot', 'Black-bindweed',
+            'Cockspur grass', 'Red-root amaranth', 'White goosefoot', 'Thorn apple', 'Potato weed',
+            'German chamomile', 'Saltbush', 'Creeping thistle', 'Field milk thistle', 'Purslane',
+            'Black nightshade', 'Mercuries', 'Spurge', 'Pale persicaria', 'Geraniums', 'Cleavers',
+            'Whitetop', 'Meadow-grass', 'Frosted orach', 'Black horehound', 'Shepherds purse',
+            'Field bindweed', 'Common mugwort', 'Hedge mustard', 'Groundsel', 'Speedwell',
+            'Broadleaf plantain', 'White ball-mustard', 'Peppermint', 'Field pennycress',
+            'Corn spurry', 'Purple crabgrass', 'Common fumitory', 'Ivy-leaved speedwell',
+            'Annual meadow grass', 'Redshank', 'Common hemp-nettle', 'Rough meadow-grass',
+            'Green bristlegrass', 'Small geranium', 'Cornflower', 'Common corn-cockle',
+            'Creeping crowfoot', 'Wall barley', 'Annual fescue', 'Purple dead-nettle',
+            'Ribwort plantain', 'Pineappleweed', 'Common chickweed', 'Hedge mustard', 'Soft brome',
+            'Wild pansy', 'Yellow rocket', 'Common wild oat', 'Red poppy', 'Rye brome', 'Knotgrass',
+            'Prickly lettuce', 'Copse-bindweed', 'Manyseeds', 'Common buckwheat', 'Chives',
+            'Garlic', 'Soybean', 'Wild carrot', 'Field mustard', 'Giant fennel',
+            'Common horsetail', 'Common dandelion', 'Vegetation'
+        ],
+        'palette': [
+            (0, 0, 0), (255, 0, 0), (234, 0, 0), (212, 0, 0), (191, 0, 0), (170, 0, 0), (149, 0, 0),
+            (255, 85, 0), (234, 78, 0), (212, 71, 0), (191, 64, 0), (170, 57, 0), (149, 50, 0),
+            (255, 170, 0), (255, 255, 0), (170, 255, 0), (85, 255, 0), (0, 255, 0), (0, 255, 85),
+            (0, 255, 170), (0, 255, 255), (0, 170, 255), (0, 85, 255), (0, 0, 255), (85, 0, 255),
+            (170, 0, 255), (255, 0, 255), (255, 0, 170), (255, 0, 85), (255, 188, 178),
+            (255, 207, 178), (255, 226, 178), (255, 245, 178), (245, 255, 178), (226, 255, 178),
+            (207, 255, 178), (188, 255, 178), (178, 255, 188), (178, 255, 207), (178, 255, 226),
+            (178, 255, 245), (178, 245, 255), (178, 226, 255), (178, 207, 255), (178, 188, 255),
+            (188, 178, 255), (207, 178, 255), (226, 178, 255), (245, 178, 255), (255, 178, 245),
+            (255, 178, 226), (255, 178, 207), (255, 178, 188), (255, 194, 178), (255, 213, 178),
+            (255, 219, 178), (255, 232, 178), (255, 238, 178), (255, 251, 178), (255, 212, 0),
+            (239, 255, 178), (233, 255, 178), (220, 255, 178), (214, 255, 178), (201, 255, 178),
+            (195, 255, 178), (182, 255, 178), (178, 255, 194), (178, 255, 200), (178, 255, 213),
+            (178, 255, 220), (178, 255, 232), (178, 255, 238), (178, 255, 251), (178, 239, 255),
+            (178, 233, 255), (178, 220, 255), (178, 214, 255), (178, 201, 255), (178, 195, 255),
+            (178, 182, 255), (194, 178, 255), (200, 178, 255), (213, 178, 255), (219, 178, 255),
+            (232, 178, 255), (238, 178, 255), (251, 178, 255), (255, 178, 239), (255, 178, 233),
+            (255, 178, 220), (255, 178, 214), (212, 255, 0), (127, 255, 0), (42, 255, 0),
+            (244, 255, 0), (159, 255, 0), (74, 255, 0), (10, 255, 0), (202, 255, 0), (128, 128, 128)
+        ]
+    }
 
-    def __init__(self, variant='SugarBeet2', **kwargs):
+    def __init__(self, variant='CropAndWeed', **kwargs):
         self.variant = variant
         
         super().__init__(

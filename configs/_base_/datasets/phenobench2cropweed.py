@@ -4,8 +4,8 @@ dataset_type_val = 'CropAndWeedDataset'
 data_root_val = '/mnt/e/datasets/cropandweed_dataset/'
 # Define your dataset's classes and palette
 dataset_meta = dict(
-    classes=('background', 'crop', 'weed'),
-    palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]]
+    classes=('Soil', 'Sugar beet', 'Creeping thistle', 'Field milk thistle'),
+    # palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0], [255, 255, 0]]
 )
 
 train_pipeline = [
@@ -22,7 +22,7 @@ train_pipeline = [
 test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations'),
-    dict(type='SugarbeetFine_2Phenobench'),
+    # dict(type='SugarbeetFine_2Phenobench'),
     # dict(type='Resize', scale=(1024, 1024), keep_ratio=False),  # Force to multiple of 8
     dict(type='PackSegInputs')
 ]
@@ -48,10 +48,11 @@ val_dataloader = dict(
     dataset=dict(
         type=dataset_type_val,
         data_root=data_root_val,
-        variant='SugarBeetFine',
+        variant='CropAndWeed',
         data_prefix=dict(
             img_path='images',
-            seg_map_path='labelIds'),
+            seg_map_path='labelIds',
+            meta_info=dataset_meta),
         pipeline=test_pipeline))
 
 
