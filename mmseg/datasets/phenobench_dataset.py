@@ -19,11 +19,9 @@ class PhenobenchDataset(BaseSegDataset):
         palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]]
     )
 
-    def __init__(self, **kwargs):
+    def __init__(self, reduce_zero_label=False, **kwargs):
         super().__init__(
-            img_suffix='.png',
-            seg_map_suffix='.png',
-            reduce_zero_label=False,
+            reduce_zero_label=reduce_zero_label,
             **kwargs)
 
     def load_data_list(self):
@@ -36,11 +34,12 @@ class PhenobenchDataset(BaseSegDataset):
         ann_dir = self.data_prefix.get('seg_map_path', None)
         
         for img in fileio.list_dir_or_file(
-                dir_path=img_dir,
+                dir_path=ann_dir,
                 list_dir=False,
-                suffix=self.img_suffix,
+                suffix=self.seg_map_suffix,
                 recursive=True):
-            data_info = dict(img_path=osp.join(img_dir, img))
+            img_file = img[:-4]+self.img_suffix
+            data_info = dict(img_path=osp.join(img_dir, img_file))
             if ann_dir is not None:
                 seg_map = img
                 data_info['seg_map_path'] = osp.join(ann_dir, seg_map)

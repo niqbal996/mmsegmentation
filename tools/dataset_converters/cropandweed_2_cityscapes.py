@@ -132,6 +132,71 @@ def parse_args():
     return parser.parse_args()
 
 
+# ---- Dataset remapper -------------------------------------------------------
+# Define future-extensible remap policies. Keys can be (dataset_variant, policy_name)
+# For now we implement a default semantic remap for Fine24 -> {0:Soil, 1:Sugar beet, 2:Weed, 255:ignore}
+
+# Target label spec (stable across policies)
+TARGET_LABELS = ['Soil', 'Sugar beet', 'Weed']  # indices: 0,1,2
+
+
+def dataset_remapper(dataset_variant: str):
+    """Return a label-id remap function and target categories based on dataset_variant.
+
+    The remap function maps source label ids -> target ids in {0,1,2,255} where 255 means ignore.
+    The categories returned correspond to the target ids 0..2.
+
+    Future: add more policies keyed by (dataset_variant, policy_name).
+    """
+
+    def create_target_categories():
+        # Build target categories and colormap
+        categories = LabelCategories()
+        mask_categories = MaskCategories()
+        points_categories = PointsCategories()
+
+        colors = {
+            0: (0, 0, 0),         # Soil/Background (black)
+            1: (255, 85, 0),      # Sugar beet (orange-ish)
+            2: (128, 255, 192),   # Weed (mint)
+        }
+        for tid, name in enumerate(TARGET_LABELS):
+            categories.add(name=name, parent='', attributes=['is_crowd'])
+            mask_categories.colormap[tid] = colors.get(tid, (0, 0, 0))
+            # All labels can carry a 'stem' point (single keypoint)
+            points_categories.add(tid, labels=['stem'], joints=[])
+        return categories, mask_categories, points_categories
+
+    if dataset_variant == 'Fine24':
+        # Policy:
+        # - id==1 (Sugar beet) -> 1
+        # - ids 0..7 except 1 -> 255 (ignore)
+        # - ids 8..23 -> 2 (Weed)
+        # - everything else -> 0 (Soil/Background)
+        def remap_id(src_id: int) -> int:
+            if src_id == 1:
+                return 1
+            if 0 <= src_id <= 7:
+                return 255
+            if 8 <= src_id <= 23:
+                return 2
+            return 0
+
+        tgt_cats, tgt_masks, tgt_points = create_target_categories()
+        return remap_id, tgt_cats, tgt_masks, tgt_points
+
+    # Default: identity mapping toward background-major setup
+    def remap_id_default(src_id: int) -> int:
+        # Unknown classes become background (0)
+        try:
+            return int(src_id)
+        except Exception:
+            return 0
+
+    tgt_cats, tgt_masks, tgt_points = create_target_categories()
+    return remap_id_default, tgt_cats, tgt_masks, tgt_points
+
+
 def load_cropandweed_dataset(
     dataset_root: str,
     dataset_variant: str,
@@ -420,8 +485,8 @@ def convert_to_cityscapes_datumaro(
     if limit is not None and limit > 0:
         image_basenames = image_basenames[:limit]
     
-    # Create categories (labels + mask colormap + points schema)
-    categories, mask_categories, points_categories = create_datumaro_categories(dataset_info['config'])
+    # Create target categories and a remapper from source ids -> target ids
+    remap_id, categories, mask_categories, points_categories = dataset_remapper(dataset_variant)
     
     # Streaming generator to reduce memory usage
     print(f"\nConverting {len(image_basenames)} images to Datumaro format (streaming)...")
@@ -453,23 +518,33 @@ def convert_to_cityscapes_datumaro(
                     height, width = img_tmp.shape[:2]
                     del img_tmp
 
+            # Apply semantic remap if mask present
+            remapped_sem = None
+            if semantic_mask is not None:
+                # Vectorized remap
+                remapped_sem = np.full_like(semantic_mask, 0, dtype=np.uint8)
+                # Handle special ignore (255) using a temporary int16 buffer
+                tmp = semantic_mask.astype(np.int32)
+                # Build LUT for speed (assumes src ids within 0..255 typical here)
+                lut = np.arange(256, dtype=np.int32)
+                for sid in np.unique(tmp):
+                    rid = remap_id(int(sid))
+                    if 0 <= sid < 256:
+                        lut[int(sid)] = rid
+                remapped = lut[np.clip(tmp, 0, 255)]
+                remapped_sem = remapped.astype(np.uint8)
+
             # Build annotations list
             annotations = []
 
             # Add bounding boxes as thing instances
             for inst_id, bbox_inst in enumerate(bbox_instances):
-                label_id = bbox_inst['label_id']
-                label_name = dataset_info['config'].get_label_name(label_id)
-                if label_name is None or label_name == 'Soil':
+                label_id_src = bbox_inst['label_id']
+                label_id_tgt = remap_id(int(label_id_src))
+                # Skip background and ignored for instances; keep Sugar beet (1) and Weed (2)
+                if label_id_tgt not in (1, 2):
                     continue
-                # Find category index by name
-                cat_idx = None
-                for i, cat in enumerate(categories.items):
-                    if cat.name == label_name:
-                        cat_idx = i
-                        break
-                if cat_idx is None:
-                    continue
+                cat_idx = int(label_id_tgt)
                 x1, y1, x2, y2 = bbox_inst['bbox']
                 annotations.append(
                     Bbox(
@@ -491,8 +566,8 @@ def convert_to_cityscapes_datumaro(
                 x2c = max(0, min(width, x2))
                 y2c = max(0, min(height, y2))
 
-                if semantic_mask is not None and x2c > x1c and y2c > y1c:
-                    region = (semantic_mask == label_id)
+                if remapped_sem is not None and x2c > x1c and y2c > y1c:
+                    region = (remapped_sem == label_id_tgt)
                     win = np.zeros_like(region, dtype=bool)
                     win[y1c:y2c, x1c:x2c] = True
                     guided = region & win
@@ -577,37 +652,27 @@ def convert_to_cityscapes_datumaro(
                     pass
 
             # Semantic masks for ALL labels (Soil as stuff with is_crowd, others as thing regions)
-            if semantic_mask is not None:
-                if not np.issubdtype(semantic_mask.dtype, np.integer):
-                    semantic_mask = semantic_mask.astype(np.uint8)
-                unique_labels = np.unique(semantic_mask)
-                for lid in unique_labels:
-                    lid_int = int(lid)
-                    label_name = dataset_info['config'].get_label_name(lid_int)
-                    if label_name is None:
-                        continue
-                    cat_idx = None
-                    for i, cat in enumerate(categories.items):
-                        if cat.name == label_name:
-                            cat_idx = i
-                            break
-                    if cat_idx is None:
-                        continue
-                    binary_mask = (semantic_mask == lid_int).astype(np.uint8)
-                    annotations.append(
-                        Mask(
-                            image=binary_mask,
-                            label=cat_idx,
-                            attributes={'is_crowd': (label_name == 'Soil')}
+            if remapped_sem is not None:
+                if not np.issubdtype(remapped_sem.dtype, np.integer):
+                    remapped_sem = remapped_sem.astype(np.uint8)
+                # Only emit masks for target categories 0,1,2; skip 255 (ignore)
+                for lid_tgt in (0, 1, 2):
+                    binary_mask = (remapped_sem == lid_tgt).astype(np.uint8)
+                    if binary_mask.any():
+                        annotations.append(
+                            Mask(
+                                image=binary_mask,
+                                label=lid_tgt,
+                                attributes={'is_crowd': (lid_tgt == 0)}
+                            )
                         )
-                    )
 
                 # Optionally save remapped labelIds if requested (debug aid)
-                if save_remapped_labelids:
+                if save_remapped_labelids and remapped_sem is not None:
                     try:
                         os.makedirs(os.path.join(viz_output_dir, 'remapped_labelIds'), exist_ok=True)
                         out_lbl_path = os.path.join(viz_output_dir, 'remapped_labelIds', f'{image_basename}.png')
-                        cv2.imwrite(out_lbl_path, semantic_mask)
+                        cv2.imwrite(out_lbl_path, remapped_sem)
                     except Exception:
                         pass
 
@@ -734,16 +799,9 @@ def convert_to_cityscapes_datumaro(
     print(f"\nExporting to Cityscapes format at {output_dir}...")
     dataset.export(
         str(output_path),
-        format='datumaro',
+        format='cityscapes',
         save_media=True,
     )
-    
-    # print(f"\n✓ Conversion complete! Dataset saved to {output_dir}")
-    # print(f"  - Variant: {dataset_variant}")
-    # print(f"  - Split: {split}")
-    # print(f"  - Images: {len(image_basenames)} (streamed)")
-    # print(f"  - Categories: {len(categories.items)}")
-
 
 def main():
     """Main entry point."""

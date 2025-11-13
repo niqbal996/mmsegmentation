@@ -1,5 +1,5 @@
-dataset_type_train = 'CropAndWeedDataset'
-data_root_train = '/ds/images/cropandweed/'
+dataset_type_train = 'PhenobenchDataset'
+data_root_train = '/ds/images/cropandweed/cityscapes_phenobench_format'
 dataset_type_val = 'PhenobenchDataset'
 data_root_val = '/netscratch/naeem/phenobench/'
 
@@ -21,7 +21,7 @@ train_pipeline = [
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
+    # dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
     dict(type='LoadAnnotations'),
     dict(type='PhenoBenchReduceClasses'),
     dict(type='PackSegInputs')
@@ -35,18 +35,22 @@ train_dataloader = dict(
     dataset=dict(
         type=dataset_type_train,
         data_root=data_root_train,
+        img_suffix='.jpg',
+        seg_map_suffix='.png',
         data_prefix=dict(
-            img_path='images',
-            seg_map_path='labelIds'),
+            img_path='leftImg8bit',
+            seg_map_path='gtFine'),
         pipeline=train_pipeline))
 val_dataloader = dict(
-    batch_size=1,
+    batch_size=4,
     num_workers=4,
-    persistent_workers=True,
+    persistent_workers=False,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
         type=dataset_type_val,
         data_root=data_root_val,
+        img_suffix='.png',
+        seg_map_suffix='.png',
         data_prefix=dict(
             img_path='val/images',
             seg_map_path='val/semantics'),
