@@ -1,7 +1,7 @@
 _base_ = ['../_base_/default_runtime.py', 
-          '../_base_/datasets/phenobench3.py',
-          
-        #   '../_base_/datasets/weeds_galore.py',
+          '../_base_/datasets/phenobench3.py',          # test Phenobench
+        #   '../_base_/datasets/phenobench2cropweed.py',  # test CropAndWeed
+        #   '../_base_/datasets/weeds_galore.py',         # test WeedsGalore  
           ]
 
 custom_imports = dict(imports='mmdet.models', allow_failed_imports=False)
