@@ -1,11 +1,11 @@
 dataset_type_train = 'PhenobenchDataset'
-data_root_train = '/mnt/e/datasets/phenobench/'
-dataset_type_val = 'CropAndWeedDataset'
-data_root_val = '/mnt/e/datasets/cropandweed_dataset/'
+data_root_train = '/netscratch/naeem/phenobench'
+dataset_type_val = 'PhenobenchDataset'
+data_root_val = '/ds/images/cropandweed/cityscapes_phenobench_format'
 # Define your dataset's classes and palette
 dataset_meta = dict(
-    classes=('Soil', 'Sugar beet', 'Creeping thistle', 'Field milk thistle'),
-    # palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0], [255, 255, 0]]
+    classes=('Soil', 'Sugarbeet', 'Weeds'),
+    palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]]
 )
 
 train_pipeline = [
@@ -43,16 +43,16 @@ train_dataloader = dict(
 val_dataloader = dict(
     batch_size=1,
     num_workers=1,
-    persistent_workers=True,
+    persistent_workers=False,
     sampler=dict(type='DefaultSampler', shuffle=True),
     dataset=dict(
         type=dataset_type_val,
         data_root=data_root_val,
-        variant='CropAndWeed',
+        img_suffix='.jpg',
+        seg_map_suffix='.png',
         data_prefix=dict(
-            img_path='images',
-            seg_map_path='labelIds',
-            meta_info=dataset_meta),
+            img_path='leftImg8bit',
+            seg_map_path='gtFine'),
         pipeline=test_pipeline))
 
 

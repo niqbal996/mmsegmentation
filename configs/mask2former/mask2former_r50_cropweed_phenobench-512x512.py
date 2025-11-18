@@ -1,5 +1,5 @@
 _base_ = ['../_base_/default_runtime.py', 
-          '../_base_/datasets/phenobench2cropweed.py']
+          '../_base_/datasets/cropweed2phenobench.py']
 
 custom_imports = dict(imports='mmdet.models', allow_failed_imports=False)
 num_classes = 3
@@ -135,7 +135,7 @@ model = dict(
     train_cfg=dict(),
     test_cfg=dict(mode='whole'))
 
-# dataset config
+# # dataset config
 # train_pipeline = [
 #     dict(type='LoadImageFromFile'),
 #     dict(type='LoadAnnotations', reduce_zero_label=False),
@@ -155,6 +155,7 @@ model = dict(
 #     dataset=dict(pipeline=train_pipeline)
 #     )
 
+num_iters = 10000
 # optimizer
 embed_multi = dict(lr_mult=1.0, decay_mult=0.0)
 optimizer = dict(
@@ -178,13 +179,13 @@ param_scheduler = [
         eta_min=0,
         power=0.9,
         begin=0,
-        end=160000,
+        end=num_iters,
         by_epoch=False)
 ]
 
 # training schedule for 160k
 train_cfg = dict(
-    type='IterBasedTrainLoop', max_iters=30000, val_interval=2000)
+    type='IterBasedTrainLoop', max_iters=num_iters, val_interval=1000)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 default_hooks = dict(
@@ -192,7 +193,7 @@ default_hooks = dict(
     logger=dict(type='LoggerHook', interval=10, log_metric_by_epoch=False),
     param_scheduler=dict(type='ParamSchedulerHook'),
     checkpoint=dict(
-        type='CheckpointHook', by_epoch=False, interval=2000,
+        type='CheckpointHook', by_epoch=False, interval=1000,
         max_keep_ckpts=1,
         save_best='mIoU'),
     sampler_seed=dict(type='DistSamplerSeedHook'),
