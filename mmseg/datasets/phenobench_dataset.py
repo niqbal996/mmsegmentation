@@ -10,7 +10,7 @@ from mmseg.datasets import BaseSegDataset
 from mmengine import fileio
 from mmseg.structures import SegDataSample
 from mmengine.structures import PixelData
-from tools.minimal_inference import ImageProcessor
+# from tools.minimal_inference import ImageProcessor
 
 @DATASETS.register_module()
 class PhenobenchDataset(BaseSegDataset):
