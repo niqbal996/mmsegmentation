@@ -23,7 +23,7 @@ class WeedsGalore(BaseSegDataset):
         super().__init__(
             img_suffix='.png',
             seg_map_suffix='.png',
-            reduce_zero_label=False,
+            # reduce_zero_label=False,
             **kwargs)
 
     def load_data_list(self):

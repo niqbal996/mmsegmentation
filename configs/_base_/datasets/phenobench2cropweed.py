@@ -1,7 +1,7 @@
 dataset_type_train = 'PhenobenchDataset'
 data_root_train = '/netscratch/naeem/phenobench'
 dataset_type_val = 'PhenobenchDataset'
-data_root_val = '/ds/images/cropandweed/cityscapes_phenobench_format'
+data_root_val = '/mnt/e/datasets/cropandweed_dataset/'
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('Soil', 'Sugarbeet', 'Weeds'),
@@ -22,8 +22,12 @@ train_pipeline = [
 test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations'),
-    # dict(type='SugarbeetFine_2Phenobench'),
-    # dict(type='Resize', scale=(1024, 1024), keep_ratio=False),  # Force to multiple of 8
+    dict(type='albu_style_transfer', 
+         target_image_list=[
+        '/mnt/e/datasets/cropandweed_dataset/images/ave-0186-0007.jpg',             
+        '/mnt/e/datasets/cropandweed_dataset/images/ave-0215-0021.jpg',
+        '/mnt/e/datasets/cropandweed_dataset/images/ave-0346-0014.jpg',
+        ]),
     dict(type='PackSegInputs')
 ]
 
@@ -41,22 +45,28 @@ train_dataloader = dict(
         pipeline=train_pipeline))
 
 val_dataloader = dict(
-    batch_size=1,
-    num_workers=1,
-    persistent_workers=False,
+    batch_size=2,
+    num_workers=2,
+    persistent_workers=True,
+    pin_memory=True,
+    prefetch_factor=8,
     sampler=dict(type='DefaultSampler', shuffle=True),
     dataset=dict(
         type=dataset_type_val,
         data_root=data_root_val,
         img_suffix='.jpg',
         seg_map_suffix='.png',
+        # indices=list(range(0, 100)),  # Use a subset of val images for quick eval
         data_prefix=dict(
-            img_path='leftImg8bit',
-            seg_map_path='gtFine'),
+            img_path='images',
+            seg_map_path='labelIds/PhenoID'),
         pipeline=test_pipeline))
 
 
 test_dataloader = val_dataloader
 
-val_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'])
+val_evaluator = dict(type='IoUMetric', 
+                     iou_metrics=['mIoU'],
+                     ignore_index=1,
+                     )
 test_evaluator = val_evaluator

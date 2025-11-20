@@ -16,7 +16,7 @@ dataset_meta = dict(
 
 train_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='LoadAnnotations', zero_indexed=False),
+    dict(type='LoadAnnotations'),
     dict(type='RandomResize', scale=(512*2, 512*3), ratio_range=(0.7, 1.0), keep_ratio=True),
     # dict(type='RandomCrop', crop_size=(600, 1024), cat_max_ratio=0.75),
     dict(type='RandomFlip', prob=0.5),
@@ -26,7 +26,10 @@ train_pipeline = [
 ]
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='LoadAnnotations', zero_indexed=False),
+    dict(type='LoadAnnotations'),
+    dict(type='albu_style_transfer', 
+        target_image_list=[
+    '/mnt/e/datasets/weedsgalore-dataset/cityscapes_binary_labels/images/train/2023-06-06_0760.png']),
     dict(type='PackSegInputs')
 ]
 
