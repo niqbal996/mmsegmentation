@@ -16,7 +16,7 @@ from .transforms import (CLAHE, AdjustGamma, Albu, BioMedical3DPad,
                          PhenoBenchReduceClasses, ActiveMaskGenerator, 
                          Sugarbeet1_2Phenobench, Sugarbeet2_2Phenobench,
                          Sugarbeet3_2Phenobench, SugarbeetFine_2Phenobench,
-                         SegRescale, CurrentActiveRound)
+                         SegRescale, CurrentActiveRound, albu_style_transfer)
 
 # yapf: enable
 __all__ = [
@@ -32,5 +32,5 @@ __all__ = [
     'RandomFlip', 'Resize',
     'PhenoBenchReduceClasses', 'Sugarbeet1_2Phenobench',
     'Sugarbeet2_2Phenobench', 'Sugarbeet3_2Phenobench',
-    'SugarbeetFine_2Phenobench', 'ActiveMaskGenerator', 'CurrentActiveRound'
+    'SugarbeetFine_2Phenobench', 'ActiveMaskGenerator', 'CurrentActiveRound', 'albu_style_transfer'
 ]

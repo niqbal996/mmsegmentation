@@ -1,12 +1,11 @@
 _base_ = ['../_base_/default_runtime.py', 
-          '../_base_/datasets/phenobench3.py',          # test Phenobench
-        #   '../_base_/datasets/phenobench2cropweed.py',  # test CropAndWeed
-        #   '../_base_/datasets/weeds_galore.py',         # test WeedsGalore  
+          '../_base_/datasets/simmetry.py',
+        #   '../_base_/datasets/simmetry_augmented.py'
           ]
 
 custom_imports = dict(imports='mmdet.models', allow_failed_imports=False)
 num_classes = 3
-crop_size = (512, 512)
+crop_size = (1024, 1024)
 data_preprocessor = dict(
     type='SegDataPreProcessor',
     mean=[123.675, 116.28, 103.53],
@@ -115,7 +114,8 @@ model = dict(
             reduction='mean',
             naive_dice=True,
             eps=1.0,
-            loss_weight=5.0),
+            loss_weight=5.0,
+            ),
         train_cfg=dict(
             num_points=12544,
             oversample_ratio=3.0,
@@ -154,6 +154,8 @@ optim_wrapper = dict(
             'level_embed': embed_multi,
         },
         norm_decay_mult=0.0))
+
+num_iters = 10000
 # learning policy
 param_scheduler = [
     dict(
@@ -161,13 +163,13 @@ param_scheduler = [
         eta_min=0,
         power=0.9,
         begin=0,
-        end=30000,
+        end=num_iters,
         by_epoch=False)
 ]
 
-# training schedule for 160k
+# training schedule for 10k
 train_cfg = dict(
-    type='IterBasedTrainLoop', max_iters=30000, val_interval=1000)
+    type='IterBasedTrainLoop', max_iters=num_iters, val_interval=1000)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 default_hooks = dict(

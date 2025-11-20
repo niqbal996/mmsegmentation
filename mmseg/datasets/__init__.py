@@ -29,6 +29,8 @@ from .synapse import SynapseDataset
 from .phenobench_dataset import PhenobenchDataset, PhenobenchDatasetAL, PhenobenchDatasetRegionBased
 from .cropandweed_dataset import CropAndWeedDataset
 from .syclops_dataset import SyclopsDataset, SyclopsDatasetCS
+from .simmetrydataset import SimmetryDataset
+from .weeds_galore import WeedsGalore
 # yapf: disable
 from .transforms import (CLAHE, AdjustGamma, Albu, BioMedical3DPad,
                          BioMedical3DRandomCrop, BioMedical3DRandomFlip,
@@ -63,8 +65,8 @@ __all__ = [
     'MapillaryDataset_v2', 'Albu', 'LEVIRCDDataset',
     'LoadMultipleRSImageFromFile', 'LoadSingleRSImageFromFile',
     'ConcatCDInput', 'BaseCDDataset', 'DSDLSegDataset', 'BDD100KDataset',
-    'NYUDataset', 'HSIDrive20Dataset', 
-    'CropAndWeedDataset', 'PhenobenchDatasetRegionBased'
-    'SyclopsDataset', 'SyclopsDatasetCS',
-    'PhenobenchDataset', 'PhenobenchDatasetAL', 'ActiveMixerDataset'
+    'NYUDataset', 'HSIDrive20Dataset',
+    'CropAndWeedDataset', 'PhenobenchDatasetRegionBased',
+    'SyclopsDataset', 'SyclopsDatasetCS', 'SimmetryDataset',
+    'PhenobenchDataset', 'PhenobenchDatasetAL', 'ActiveMixerDataset', 'WeedsGalore'
 ]

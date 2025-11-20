@@ -24,6 +24,7 @@ from mmseg.registry import TRANSFORMS
 try:
     import albumentations
     from albumentations import Compose
+    import albumentations as A
     ALBU_INSTALLED = True
 except ImportError:
     albumentations = None
@@ -2780,6 +2781,43 @@ class CurrentActiveRound(BaseTransform):
             dict: add active_round value to indicate which labelling round is currently going on
         """ 
         results['active_round'] = self.active_round
+        return results
+    
+@TRANSFORMS.register_module()
+class albu_style_transfer(object):
+    """Exchange weed and onion class IDs."""
+
+    def __init__(self, target_image_list: List[str]):
+        self.reference_images = [cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB) for img_path in target_image_list]
+        # self.reference_images = target_image_list
+        self.transform = A.Compose([
+            A.HistogramMatching(
+                blend_ratio=(0.7, 0.9),  # Control the strength of histogram matching
+                reference_images=self.reference_images,
+                metadata_key="reference_imgs",  # Custom metadata key
+                p=1.0,
+                always_apply=True,
+            )
+        ])
+    def __call__(self, results):
+        """Call function to convert RGB image to transformed target domain image
+
+        Args:
+            results (dict): Result dict from loading pipeline.
+
+        Returns:
+            dict: Result dict with transformed target domain image.
+        """
+        img = results['img']
+        assert len(img.shape) == 3
+        # reference_image = random.choice(self.reference_images)
+        transformed_image = self.transform(
+            image=img,
+            reference_imgs=self.reference_images  # Pass reference image via metadata key
+        )
+        results['img'] = transformed_image['image']
+        # results['img_shape'] = transformed_image['image'].shape
+
         return results
     
 @TRANSFORMS.register_module()
