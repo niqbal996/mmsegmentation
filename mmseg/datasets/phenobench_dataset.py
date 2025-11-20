@@ -41,7 +41,7 @@ class PhenobenchDataset(BaseSegDataset):
             img_file = img[:-4]+self.img_suffix
             data_info = dict(img_path=osp.join(img_dir, img_file))
             if ann_dir is not None:
-                seg_map = img
+                seg_map = img[:-4] + self.seg_map_suffix
                 data_info['seg_map_path'] = osp.join(ann_dir, seg_map)
             data_info['label_map'] = None
             data_info['reduce_zero_label'] = False

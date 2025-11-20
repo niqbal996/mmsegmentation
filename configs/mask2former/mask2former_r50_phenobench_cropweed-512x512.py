@@ -171,6 +171,9 @@ optim_wrapper = dict(
             'level_embed': embed_multi,
         },
         norm_decay_mult=0.0))
+
+num_iters=10000
+ckpt_interval=1000
 # learning policy
 param_scheduler = [
     dict(
@@ -178,13 +181,13 @@ param_scheduler = [
         eta_min=0,
         power=0.9,
         begin=0,
-        end=160000,
+        end=num_iters,
         by_epoch=False)
 ]
 
-# training schedule for 160k
+# training schedule for num_iters
 train_cfg = dict(
-    type='IterBasedTrainLoop', max_iters=30000, val_interval=2000)
+    type='IterBasedTrainLoop', max_iters=num_iters, val_interval=ckpt_interval)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 default_hooks = dict(
@@ -192,7 +195,7 @@ default_hooks = dict(
     logger=dict(type='LoggerHook', interval=10, log_metric_by_epoch=False),
     param_scheduler=dict(type='ParamSchedulerHook'),
     checkpoint=dict(
-        type='CheckpointHook', by_epoch=False, interval=2000,
+        type='CheckpointHook', by_epoch=False, interval=ckpt_interval,
         max_keep_ckpts=1,
         save_best='mIoU'),
     sampler_seed=dict(type='DistSamplerSeedHook'),

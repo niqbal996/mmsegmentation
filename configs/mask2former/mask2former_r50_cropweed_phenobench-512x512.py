@@ -172,6 +172,8 @@ optim_wrapper = dict(
             'level_embed': embed_multi,
         },
         norm_decay_mult=0.0))
+
+num_iters = 5000
 # learning policy
 param_scheduler = [
     dict(

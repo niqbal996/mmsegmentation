@@ -1,10 +1,13 @@
-dataset_type = 'PhenobenchDataset'
-data_root = '/mnt/e/datasets/phenobench/'
+import os
+dataset_type = 'PhenobenchDatasetAL'
+data_root = '/netscratch/naeem/phenobench/'
 
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('background', 'crop', 'weed'),
-    palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]]
+    palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]],
+    subset_ratio=float(os.environ.get('SUBSET_RATIO', 0.1)),
+    random_seed=42,
 )
 
 train_pipeline = [
@@ -33,6 +36,9 @@ train_dataloader = dict(
     dataset=dict(
         type=dataset_type,
         data_root=data_root,
+        subset_ratio=dataset_meta['subset_ratio'],
+        # random_seed=dataset_meta['random_seed'],
+        sample_list='/netscratch/naeem/phenobench/phenobench_train_list.txt',
         data_prefix=dict(
             img_path='train/images',
             seg_map_path='train/semantics'),

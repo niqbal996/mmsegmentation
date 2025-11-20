@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
+
 source ~/miniconda3/bin/activate
 conda activate mmseg
-cd mmengine && python3 -m pip install -e . && cd ..
-cd mmsegmentation && python3 -m pip install -e . && cd ..
-cd mmdetection && python3 -m pip install -e . && cd ..
-sed -i "102s|.*|                img_bytes, flag=self.color_type, backend='pillow')|" /root/miniconda3/envs/mmseg/lib/python3.8/site-packages/mmcv/transforms/loading.py
-export PYTHONPATH=$PYTHONPATH:/home/iqbal/mmsegmentation/:/home/iqbal/mmdetection:/home/iqbal/mmengine
+# python3 tools/train.py \
+# configs/pidnet/pidnet-s_1024x1024_al.py \
+# --work-dir /netscratch/naeem/tfp_project/pidnet_s_1024x1024_pheno_al
+
+python3 tools/test.py \
+configs/mask2former/mask2former_r50_phenobench-512x512.py \
+/netscratch/naeem/mmseg_output/Mask2Former_random_sampling_phenobench_100/best_mIoU_iter_30000.pth \
+--work-dir /netscratch/naeem/mmseg_output/ijcai_results/pheno2cropandweed/ \
+--show-dir /netscratch/naeem/mmseg_output/ijcai_results/pheno2cropandweed/
+
+python3 tools/test.py \
+configs/mask2former/mask2former_r50_phenobench-512x512.py \
+/netscratch/naeem/mmseg_output/mask2former_r50_ade20k_synthetic2phenobench_baseline/best_mIoU_iter_5000.pth \
+--work-dir /netscratch/naeem/mmseg_output/ijcai_results/synthetic2cropandweed/ \
+--show-dir /netscratch/naeem/mmseg_output/ijcai_results/synthetic2cropandweed/
+
 python3 tools/train.py \
-configs/mask2former/mask2former_r50_cropweed_phenobench-512x512.py \
---work-dir /netscratch/naeem/mmseg_output/ijcai_results/cropandweed2phenobench
+configs/mask2former/mask2former_r50_phenobench_cropweed-512x512.py \
+--work-dir /netscratch/naeem/mmseg_output/ijcai_results/cropandweed2phenobench/

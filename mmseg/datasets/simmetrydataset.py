@@ -10,10 +10,47 @@ from mmengine import fileio
 
 @DATASETS.register_module()
 class SimmetryDataset(BaseSegDataset):
+    # full config
+    # METAINFO = dict(
+    #     classes=('Ground', 'Onions', 'Gaensefuss', 'Hirse', 'Labkraut'),
+    #     palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0], [255, 255, 0], [0, 0, 255]]
+    # )
+    
+    # # weeds 3 classes
+    # METAINFO = dict(
+    #     classes=('Ground', 'Gaensefuss', 'Hirse', 'Labkraut'),
+    #     palette=[
+    #         [0, 0, 0], 
+    #         [0, 255, 0], 
+    #         [255, 0, 0], 
+    #         [255, 255, 0]]
+    # )
+
+    # # weeds 1 class
+    # METAINFO = dict(
+    #     classes=('Ground', 'Weeds'),
+    #     palette=[
+    #         [0, 0, 0], 
+    #         [0, 255, 0]]
+    # )
+
+    # phenobench format
     METAINFO = dict(
-        classes=('Ground', 'Onions', 'Gaensefuss', 'Hirse', 'Labkraut'),
-        palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0], [255, 255, 0], [0, 0, 255]]
+        classes=('Ground', 'Onions', 'Weeds'),
+        # classes=('Ground', 'Weeds', 'Onions'),
+        palette=[
+            [0, 0, 0], 
+            [0, 255, 0], 
+            [255, 0, 0]]
     )
+
+    # onions only
+    # METAINFO = dict(
+    #     classes=('Ground', 'Onions'),
+    #     palette=[
+    #         [0, 0, 0], 
+    #         [0, 255, 0]]
+    # )
 
     def __init__(self, **kwargs):
         super().__init__(
