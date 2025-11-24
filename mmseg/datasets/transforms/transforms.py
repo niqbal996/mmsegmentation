@@ -2819,25 +2819,3 @@ class albu_style_transfer(object):
         # results['img_shape'] = transformed_image['image'].shape
 
         return results
-    
-@TRANSFORMS.register_module()
-class TFP_p4ai2simmetry(object):
-    """Exchange weed and onion class IDs."""
-
-    def __call__(self, results):
-        """Call function to reduce classes.
-
-        Args:
-            results (dict): Result dict from :obj:`mmseg.CustomDataset`.
-
-        Returns:
-            dict: The dict contains reduced semantic segmentation annotations.
-        """
-
-        seg_map = results['gt_seg_map']
-        tmp = seg_map.copy()
-        seg_map[tmp == 1] = 2
-        seg_map[tmp == 2] = 1
-        del tmp 
-        results['gt_seg_map'] = seg_map
-        return results
