@@ -8,8 +8,8 @@ import random
 @DATASETS.register_module()
 class SyclopsDataset(BaseSegDataset):
     METAINFO = dict(
-        classes=('background', 'crop', 'weed', 'other'),
-        palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0], [0, 0, 255]]
+        classes=('background', 'crop', 'weed'),
+        palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]]
     )
 
     def __init__(self, subset_fraction=1.0, random_seed=None, **kwargs):

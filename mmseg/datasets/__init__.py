@@ -26,7 +26,9 @@ from .potsdam import PotsdamDataset
 from .refuge import REFUGEDataset
 from .stare import STAREDataset
 from .synapse import SynapseDataset
-from .phenobench_dataset import PhenobenchDataset, PhenobenchDatasetAL, PhenobenchDatasetRegionBased
+from .phenobench_dataset import (PhenobenchDataset, PhenobenchDatasetAL,
+                                 PhenobenchDatasetCopyPasteWeed,
+                                 PhenobenchDatasetRegionBased)
 from .cropandweed_dataset import CropAndWeedDataset
 from .syclops_dataset import SyclopsDataset, SyclopsDatasetCS
 from .weeds_galore import WeedsGalore
@@ -67,5 +69,6 @@ __all__ = [
     'NYUDataset', 'HSIDrive20Dataset',
     'CropAndWeedDataset', 'PhenobenchDatasetRegionBased',
     'SyclopsDataset', 'SyclopsDatasetCS',
-    'PhenobenchDataset', 'PhenobenchDatasetAL', 'ActiveMixerDataset', 'WeedsGalore'
+    'PhenobenchDataset', 'PhenobenchDatasetAL', 'PhenobenchDatasetCopyPasteWeed',
+    'ActiveMixerDataset', 'WeedsGalore'
 ]

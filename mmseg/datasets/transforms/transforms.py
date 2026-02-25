@@ -2427,18 +2427,30 @@ class Albu(BaseTransform):
         # dict to albumentations format
         results = self.mapper(results, self.keymap_to_albu)
 
+        albu_inputs = {}
+        passthrough = {}
+        allowed_keys = {'image', 'mask', 'masks', 'bboxes', 'keypoints'}
+        if self.additional_targets:
+            allowed_keys.update(set(self.additional_targets.keys()))
+
+        for key, value in results.items():
+            if key in allowed_keys:
+                albu_inputs[key] = value
+            else:
+                passthrough[key] = value
+
         # Convert to RGB since Albumentations works with RGB images
         if self.bgr_to_rgb:
-            results['image'] = cv2.cvtColor(results['image'],
-                                            cv2.COLOR_BGR2RGB)
+            albu_inputs['image'] = cv2.cvtColor(albu_inputs['image'],
+                                                cv2.COLOR_BGR2RGB)
             if self.additional_targets:
                 for key, value in self.additional_targets.items():
-                    if value == 'image':
-                        results[key] = cv2.cvtColor(results[key],
-                                                    cv2.COLOR_BGR2RGB)
+                    if value == 'image' and key in albu_inputs:
+                        albu_inputs[key] = cv2.cvtColor(albu_inputs[key],
+                                                        cv2.COLOR_BGR2RGB)
 
         # Apply Transform
-        results = self.aug(**results)
+        results = self.aug(**albu_inputs)
 
         # Convert back to BGR
         if self.bgr_to_rgb:
@@ -2446,9 +2458,11 @@ class Albu(BaseTransform):
                                             cv2.COLOR_RGB2BGR)
             if self.additional_targets:
                 for key, value in self.additional_targets.items():
-                    if value == 'image':
-                        results[key] = cv2.cvtColor(results['image2'],
+                    if value == 'image' and key in results:
+                        results[key] = cv2.cvtColor(results[key],
                                                     cv2.COLOR_RGB2BGR)
+
+        results.update(passthrough)
 
         # back to the original format
         results = self.mapper(results, self.keymap_back)

@@ -1,6 +1,9 @@
 import os
-dataset_type = 'PhenobenchDatasetAL'
+dataset_type_train = 'PhenobenchDatasetCopyPasteWeed'
+dataset_type_val = 'PhenobenchDataset'
 data_root = '/netscratch/naeem/phenobench/'
+syn_data_root = '/netscratch/naeem/sugarbeet_syn_v6/'
+
 
 # Define your dataset's classes and palette
 dataset_meta = dict(
@@ -34,11 +37,10 @@ train_dataloader = dict(
     persistent_workers=True,
     sampler=dict(type='InfiniteSampler', shuffle=True),
     dataset=dict(
-        type=dataset_type,
+        type=dataset_type_train,
         data_root=data_root,
-        subset_ratio=dataset_meta['subset_ratio'],
-        # random_seed=dataset_meta['random_seed'],
-        sample_list='/netscratch/naeem/phenobench/phenobench_train_list.txt',
+        syclops_img_path=os.path.join(syn_data_root, 'images/train'),
+        syclops_seg_map_path=os.path.join(syn_data_root, 'main_camera_annotations/semantics/train'),
         data_prefix=dict(
             img_path='train/images',
             seg_map_path='train/semantics'),
@@ -49,25 +51,12 @@ val_dataloader = dict(
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
-        type=dataset_type,
+        type=dataset_type_val,
         data_root=data_root,
         data_prefix=dict(
             img_path='val/images',
             seg_map_path='val/semantics'),
         pipeline=test_pipeline))
 test_dataloader = val_dataloader
-# test_dataloader = dict(
-#     batch_size=1,
-#     num_workers=4,
-#     persistent_workers=True,
-#     sampler=dict(type='DefaultSampler', shuffle=False),
-#     dataset=dict(
-#         type=dataset_type,
-#         data_root=data_root,
-#         data_prefix=dict(
-#             img_path='test/images',
-#             seg_map_path='test/semantics'),
-#         pipeline=test_pipeline))
-
 val_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'])
 test_evaluator = val_evaluator

@@ -38,6 +38,10 @@ def parse_args():
         'Note that the quotation marks are necessary and that no white space '
         'is allowed.')
     parser.add_argument(
+        '--eval-after-training',
+        action='store_true',
+        help='evaluate the checkpoint after training')
+    parser.add_argument(
         '--launcher',
         choices=['none', 'pytorch', 'slurm', 'mpi'],
         default='none',
@@ -100,6 +104,26 @@ def main():
 
     # start training
     runner.train()
+
+    # test the best checkpoint after training
+    if args.eval_after_training:
+        # The runner has a `work_dir` attribute that stores the path of the
+        # current work directory.
+        best_ckpt_path = None
+        for filename in os.listdir(runner.work_dir):
+            if filename.startswith('best_mIoU_iter_') and filename.endswith('.pth'):
+                best_ckpt_path = osp.join(runner.work_dir, filename)
+                break
+        
+        if best_ckpt_path and osp.exists(best_ckpt_path):
+            runner.load_checkpoint(best_ckpt_path)
+            runner.test()
+        else:
+            print_log(
+                'Best checkpoint is not found, please check your validation '
+                'configuration.',
+                logger='current',
+                level=logging.WARNING)
 
 
 if __name__ == '__main__':

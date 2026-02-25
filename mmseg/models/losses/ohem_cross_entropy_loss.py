@@ -40,7 +40,8 @@ class OhemCrossEntropy(nn.Module):
                  min_kept: int = 100000,
                  loss_weight: float = 1.0,
                  class_weight: Optional[Union[List[float], str]] = None,
-                 loss_name: str = 'loss_ohem'):
+                 loss_name: str = 'loss_ohem',
+                 use_sigmoid: bool = False):
         super().__init__()
         self.thresh = thres
         self.min_kept = max(1, min_kept)
@@ -49,11 +50,19 @@ class OhemCrossEntropy(nn.Module):
         self.loss_name_ = loss_name
         self.class_weight = class_weight
 
-    def forward(self, score: Tensor, target: Tensor) -> Tensor:
+    def forward(self, 
+                score: Tensor, 
+                target: Tensor, 
+                weight=None, 
+                ignore_index=None) -> Tensor:
         """Forward function.
         Args:
             score (Tensor): Predictions of the segmentation head.
             target (Tensor): Ground truth of the image.
+            weight (Tensor, optional): Manual weight for each pixel.
+                Defaults to None.
+            ignore_index (int, optional): The label index to be ignored.
+                Default: None.
 
         Returns:
             Tensor: Loss tensor.
