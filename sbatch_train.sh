@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=mmseg_training
-#SBATCH --partition=A100-40GB
+#SBATCH --partition=RTX3090
 #SBATCH --mem=40G
 #SBATCH --cpus-per-task=5
 #SBATCH --gres=gpu:1
@@ -39,5 +39,5 @@ srun \
   --container-mounts=/netscratch/naeem:/netscratch/naeem,/home/iqbal/mmsegmentation:/home/iqbal/mmsegmentation,/ds/images/cropandweed:/ds/images/cropandweed,/home/iqbal/mmengine:/home/iqbal/mmengine,/home/iqbal/mmdetection:/home/iqbal/mmdetection \
   --container-image=/netscratch/naeem/mmseg_23.09_09_2025_ADA.sqsh  \
   --container-workdir=/home/iqbal/mmsegmentation \
-  --time=01-00:00 \
-  bash -c "source ~/miniconda3/bin/activate && conda activate mmseg && python3 tools/train.py ${CONFIG_FILE} --work-dir ${WORK_DIR}"
+  --time=00-14:00 \
+  bash -c "source ~/miniconda3/bin/activate && conda activate mmseg && pip install albumentations>=0.3.2 && python3 tools/train.py ${CONFIG_FILE} --work-dir ${WORK_DIR} --eval-after-training"

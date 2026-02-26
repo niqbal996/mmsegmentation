@@ -43,6 +43,7 @@ train_dataloader = dict(
         syclops_instance_map_path=os.path.join(syn_data_root, 'main_camera_annotations/instance_segmentation'),
         syclops_img_path=os.path.join(syn_data_root, 'images/train'),
         syclops_seg_map_path=os.path.join(syn_data_root, 'main_camera_annotations/semantics/train'),
+        poisson_blending=True,
         data_prefix=dict(
             img_path='train/images',
             seg_map_path='train/semantics'),

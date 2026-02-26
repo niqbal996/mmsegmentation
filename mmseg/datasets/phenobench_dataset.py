@@ -2,10 +2,14 @@ import os
 import os.path as osp
 from pathlib import Path
 import random
-from collections import deque
+import gc
 import numpy as np
 import torch
 from PIL import Image
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 try:
     from tqdm import tqdm
 except ImportError:
@@ -215,11 +219,17 @@ class PhenobenchDatasetCopyPasteWeed(BaseSegDataset):
     def __init__(self,
                  syclops_img_path,
                  syclops_seg_map_path,
+                 syclops_instance_map_path=None,
                  syclops_img_suffix='.png',
                  syclops_seg_map_suffix='.png',
+                 syclops_instance_map_suffix='.npz',
                  syclops_pool_num_images=500,
+                 max_instances_per_source_image=64,
+                 max_total_pool_instances=20000,
+                 pack_instance_masks=True,
                  show_pool_progress=True,
-                 num_weeds_range=(1, 3),
+                 poisson_blending=False,
+                 num_weeds_range=(5, 10),
                  min_weed_area=20,
                  max_placement_trials=50,
                  dump_debug_samples=True,
@@ -228,11 +238,19 @@ class PhenobenchDatasetCopyPasteWeed(BaseSegDataset):
                  **kwargs):
         self.syclops_img_path = syclops_img_path
         self.syclops_seg_map_path = syclops_seg_map_path
+        self.syclops_instance_map_path = syclops_instance_map_path
         self.syclops_img_suffix = syclops_img_suffix
         self.syclops_seg_map_suffix = syclops_seg_map_suffix
+        self.syclops_instance_map_suffix = syclops_instance_map_suffix
         self.syclops_pool_num_images = (
             None if syclops_pool_num_images is None else int(syclops_pool_num_images))
+        self.max_instances_per_source_image = (
+            None if max_instances_per_source_image is None else int(max_instances_per_source_image))
+        self.max_total_pool_instances = (
+            None if max_total_pool_instances is None else int(max_total_pool_instances))
+        self.pack_instance_masks = bool(pack_instance_masks)
         self.show_pool_progress = bool(show_pool_progress)
+        self.poisson_blending = bool(poisson_blending)
         self.min_weed_area = max(1, int(min_weed_area))
         self.max_placement_trials = max(1, int(max_placement_trials))
         self.dump_debug_samples = bool(dump_debug_samples)
@@ -240,7 +258,7 @@ class PhenobenchDatasetCopyPasteWeed(BaseSegDataset):
         self._rng = random.Random(random_seed)
         self._src_img_cache = {}
         self._debug_dump_count = 0
-        self._debug_dump_root = '/netscratch/naeem/mmseg_output/eccv_results/Deeplabv3Plus_r50_phenobench_with_syn_copy_pasting_focal_loss_weighted/copypaste'
+        self._debug_dump_root = '/netscratch/naeem/mmseg_output/eccv_results/Deeplabv3Plus_r50_phenobench_with_syn_copy_pasting_ohem_loss_weighted/copypaste'
         self._debug_rgb_dir = osp.join(self._debug_dump_root, 'rgb')
         self._debug_mask_dir = osp.join(self._debug_dump_root, 'mask')
 
@@ -256,6 +274,10 @@ class PhenobenchDatasetCopyPasteWeed(BaseSegDataset):
         if max_weeds < min_weeds:
             max_weeds = min_weeds
         self.num_weeds_range = (min_weeds, max_weeds)
+
+        if self.poisson_blending and cv2 is None:
+            print('[CopyPasteWeed] Warning: poisson_blending=True but cv2 is not installed. Falling back to naive copy-paste.')
+            self.poisson_blending = False
 
         super().__init__(
             img_suffix='.png',
@@ -342,12 +364,12 @@ class PhenobenchDatasetCopyPasteWeed(BaseSegDataset):
 
     def _read_seg_map(self, seg_map_path):
         if seg_map_path.endswith('.npz'):
-            npz_data = np.load(seg_map_path)
-            if 'array' in npz_data:
-                seg_map = npz_data['array']
-            else:
-                first_key = list(npz_data.keys())[0]
-                seg_map = npz_data[first_key]
+            with np.load(seg_map_path) as npz_data:
+                if 'array' in npz_data:
+                    seg_map = npz_data['array'].copy()
+                else:
+                    first_key = list(npz_data.keys())[0]
+                    seg_map = npz_data[first_key].copy()
         else:
             seg_map = np.array(Image.open(seg_map_path))
 
@@ -359,6 +381,15 @@ class PhenobenchDatasetCopyPasteWeed(BaseSegDataset):
     def _build_weed_pool(self):
         weed_pool = []
         suffix_len = len(self.syclops_img_suffix)
+        skipped_missing_sem = 0
+        skipped_missing_inst = 0
+        skipped_shape = 0
+        skipped_invalid_sem = 0
+        errored = 0
+
+        if not self.syclops_instance_map_path:
+            print('Warning: syclops_instance_map_path is not set. Weed pool will be empty.')
+            return weed_pool
 
         img_rel_list = list(fileio.list_dir_or_file(
             dir_path=self.syclops_img_path,
@@ -381,77 +412,158 @@ class PhenobenchDatasetCopyPasteWeed(BaseSegDataset):
                 unit='img',
                 leave=False)
 
-        for img_rel in iterator:
-            img_path = osp.join(self.syclops_img_path, img_rel)
-            seg_rel = img_rel[:-suffix_len] + self.syclops_seg_map_suffix
-            seg_path = osp.join(self.syclops_seg_map_path, seg_rel)
-            if not osp.exists(seg_path):
-                continue
-
-            seg_map = self._read_seg_map(seg_path)
-            if seg_map.ndim != 2:
-                continue
-
-            weed_binary = seg_map == 2
-            components = self._extract_connected_components(weed_binary)
-            for comp in components:
-                if int(comp['mask'].sum()) < self.min_weed_area:
+        for sample_idx, img_rel in enumerate(iterator, start=1):
+            seg_map = None
+            instance_map = None
+            instance_components = None
+            try:
+                img_path = osp.join(self.syclops_img_path, img_rel)
+                seg_rel = img_rel[:-suffix_len] + self.syclops_seg_map_suffix
+                seg_path = osp.join(self.syclops_seg_map_path, seg_rel)
+                if not osp.exists(seg_path):
+                    skipped_missing_sem += 1
                     continue
-                weed_pool.append(
-                    dict(
-                        src_img_path=img_path,
-                        y1=comp['y1'],
-                        y2=comp['y2'],
-                        x1=comp['x1'],
-                        x2=comp['x2'],
-                        mask=comp['mask']))
+
+                seg_map = self._read_seg_map(seg_path)
+                if seg_map.ndim != 2:
+                    skipped_invalid_sem += 1
+                    continue
+
+                inst_rel = img_rel[:-suffix_len] + self.syclops_instance_map_suffix
+                inst_path = osp.join(self.syclops_instance_map_path, inst_rel)
+                if not osp.exists(inst_path):
+                    skipped_missing_inst += 1
+                    continue
+
+                instance_map = self._read_instance_map(inst_path)
+                if instance_map is None or instance_map.shape != seg_map.shape:
+                    skipped_shape += 1
+                    continue
+
+                instance_components = self._extract_instances_from_maps(instance_map, seg_map)
+                valid_components = []
+                for comp in instance_components:
+                    if int(comp['mask'].sum()) >= self.min_weed_area:
+                        valid_components.append(comp)
+
+                if (self.max_instances_per_source_image is not None
+                        and self.max_instances_per_source_image >= 0
+                        and len(valid_components) > self.max_instances_per_source_image):
+                    valid_components = self._rng.sample(
+                        valid_components, self.max_instances_per_source_image)
+
+                for comp in valid_components:
+                    weed_pool.append(
+                        dict(
+                            src_img_path=img_path,
+                            y1=comp['y1'],
+                            y2=comp['y2'],
+                            x1=comp['x1'],
+                            x2=comp['x2'],
+                            mask=self._encode_mask(comp['mask'])))
+                    if (self.max_total_pool_instances is not None
+                            and self.max_total_pool_instances >= 0
+                            and len(weed_pool) >= self.max_total_pool_instances):
+                        print(
+                            '[CopyPasteWeed] Reached max_total_pool_instances='
+                            f'{self.max_total_pool_instances}. Stopping pool build early.')
+                        return weed_pool
+            except Exception as exc:
+                errored += 1
+                print(f'[CopyPasteWeed] Failed on {img_rel}: {exc}')
+                continue
+            finally:
+                del seg_map
+                del instance_map
+                del instance_components
+                if sample_idx % 50 == 0:
+                    gc.collect()
+
+        print(
+            '[CopyPasteWeed] Weed pool build summary: '
+            f'images_scanned={len(img_rel_list)}, '
+            f'instances={len(weed_pool)}, '
+            f'skipped_missing_sem={skipped_missing_sem}, '
+            f'skipped_missing_inst={skipped_missing_inst}, '
+            f'skipped_shape={skipped_shape}, '
+            f'skipped_invalid_sem={skipped_invalid_sem}, '
+            f'errored={errored}')
 
         return weed_pool
 
-    def _extract_connected_components(self, binary_mask):
-        h, w = binary_mask.shape
-        visited = np.zeros((h, w), dtype=bool)
+    def _read_instance_map(self, instance_map_path):
+        if instance_map_path.endswith('.npz'):
+            with np.load(instance_map_path) as npz_data:
+                if 'array' in npz_data:
+                    instance_map = npz_data['array'].copy()
+                else:
+                    first_key = list(npz_data.keys())[0]
+                    instance_map = npz_data[first_key].copy()
+        else:
+            instance_map = np.array(Image.open(instance_map_path))
+
+        instance_map = np.asarray(instance_map).squeeze()
+        if instance_map.ndim != 2:
+            raise ValueError(f'Instance map should be 2D, got shape {instance_map.shape}')
+        return self._remap_instance_ids_to_uint8(instance_map)
+
+    def _remap_instance_ids_to_uint8(self, instance_map):
+        remapped = np.zeros(instance_map.shape, dtype=np.uint8)
+        unique_ids = np.unique(instance_map)
+        foreground_ids = unique_ids[unique_ids > 0]
+
+        if foreground_ids.size == 0:
+            return remapped
+
+        if foreground_ids.size > 255:
+            print(
+                '[CopyPasteWeed] Warning: found '
+                f'{foreground_ids.size} foreground instances in one image; '
+                'keeping first 255 after sorting and dropping the rest.')
+            foreground_ids = foreground_ids[:255]
+
+        for new_id, old_id in enumerate(foreground_ids, start=1):
+            remapped[instance_map == old_id] = new_id
+
+        return remapped
+
+    def _extract_instances_from_maps(self, instance_map, semantic_map):
         components = []
-        ys, xs = np.where(binary_mask)
+        weed_sem = semantic_map == 2
+        instance_ids = np.unique(instance_map)
 
-        for sy, sx in zip(ys, xs):
-            if visited[sy, sx]:
+        for instance_id in instance_ids:
+            if instance_id <= 0:
                 continue
 
-            queue = deque([(int(sy), int(sx))])
-            visited[sy, sx] = True
-            coords = []
-
-            while queue:
-                y, x = queue.popleft()
-                coords.append((y, x))
-
-                if y > 0 and binary_mask[y - 1, x] and not visited[y - 1, x]:
-                    visited[y - 1, x] = True
-                    queue.append((y - 1, x))
-                if y + 1 < h and binary_mask[y + 1, x] and not visited[y + 1, x]:
-                    visited[y + 1, x] = True
-                    queue.append((y + 1, x))
-                if x > 0 and binary_mask[y, x - 1] and not visited[y, x - 1]:
-                    visited[y, x - 1] = True
-                    queue.append((y, x - 1))
-                if x + 1 < w and binary_mask[y, x + 1] and not visited[y, x + 1]:
-                    visited[y, x + 1] = True
-                    queue.append((y, x + 1))
-
-            if not coords:
+            instance_binary = instance_map == instance_id
+            weed_instance = np.logical_and(instance_binary, weed_sem)
+            if not np.any(weed_instance):
                 continue
 
-            y_coords = np.array([p[0] for p in coords], dtype=np.int32)
-            x_coords = np.array([p[1] for p in coords], dtype=np.int32)
-            y1, y2 = int(y_coords.min()), int(y_coords.max()) + 1
-            x1, x2 = int(x_coords.min()), int(x_coords.max()) + 1
-
-            comp_mask = np.zeros((y2 - y1, x2 - x1), dtype=bool)
-            comp_mask[y_coords - y1, x_coords - x1] = True
+            ys, xs = np.where(weed_instance)
+            y1, y2 = int(ys.min()), int(ys.max()) + 1
+            x1, x2 = int(xs.min()), int(xs.max()) + 1
+            comp_mask = weed_instance[y1:y2, x1:x2]
             components.append(dict(y1=y1, y2=y2, x1=x1, x2=x2, mask=comp_mask))
 
         return components
+
+    def _encode_mask(self, mask):
+        mask_bool = np.asarray(mask, dtype=bool)
+        if not self.pack_instance_masks:
+            return mask_bool
+        flat = mask_bool.reshape(-1)
+        packed = np.packbits(flat)
+        return dict(shape=mask_bool.shape, packed=packed)
+
+    def _decode_mask(self, stored_mask):
+        if isinstance(stored_mask, dict):
+            shape = stored_mask['shape']
+            packed = stored_mask['packed']
+            flat = np.unpackbits(packed)[:shape[0] * shape[1]]
+            return flat.reshape(shape).astype(bool)
+        return np.asarray(stored_mask, dtype=bool)
 
     def _get_src_image(self, src_img_path):
         src_img = self._src_img_cache.get(src_img_path, None)
@@ -474,7 +586,7 @@ class PhenobenchDatasetCopyPasteWeed(BaseSegDataset):
 
         for _ in range(num_to_insert):
             weed_item = self._rng.choice(self._weed_pool)
-            weed_mask = weed_item['mask']
+            weed_mask = self._decode_mask(weed_item['mask'])
             weed_h, weed_w = weed_mask.shape
 
             if weed_h > h or weed_w > w:
@@ -494,8 +606,24 @@ class PhenobenchDatasetCopyPasteWeed(BaseSegDataset):
                 if np.any(target_crop[weed_mask] != 0):
                     continue
 
-                out_crop = out_img[top:top + weed_h, left:left + weed_w]
-                out_crop[weed_mask] = weed_rgb[weed_mask]
+                if self.poisson_blending and cv2 is not None:
+                    src_patch = weed_rgb.astype(np.uint8)
+                    blend_mask = np.zeros((weed_h, weed_w), dtype=np.uint8)
+                    blend_mask[weed_mask] = 255
+                    center = (left + weed_w // 2, top + weed_h // 2)
+                    try:
+                        out_img = cv2.seamlessClone(
+                            src_patch,
+                            out_img.astype(np.uint8),
+                            blend_mask,
+                            center,
+                            cv2.NORMAL_CLONE)
+                    except cv2.error:
+                        out_crop = out_img[top:top + weed_h, left:left + weed_w]
+                        out_crop[weed_mask] = weed_rgb[weed_mask]
+                else:
+                    out_crop = out_img[top:top + weed_h, left:left + weed_w]
+                    out_crop[weed_mask] = weed_rgb[weed_mask]
                 target_crop[weed_mask] = 2
                 break
 
