@@ -3,7 +3,14 @@ from mmseg.datasets import BaseSegDataset
 from mmengine import fileio
 import numpy as np
 import os.path as osp
+import os
 import random
+from PIL import Image
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 @DATASETS.register_module()
 class SyclopsDataset(BaseSegDataset):
@@ -216,3 +223,160 @@ class SyclopsDatasetCS(BaseSegDataset):
         """
         return self.load_annotations(self.data_list[idx]['img_path'],
                                    self.data_list[idx]['seg_map_path'])
+
+
+@DATASETS.register_module()
+class SyclopsDatasetDilatedWeedInstances(BaseSegDataset):
+    METAINFO = dict(
+        classes=('background', 'crop', 'weed'),
+        palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]]
+    )
+
+    def __init__(self,
+                 instance_map_path,
+                 img_suffix='.png',
+                 seg_map_suffix='.png',
+                 instance_map_suffix='.npz',
+                 dilate_kernel_size=5,
+                 dilate_iterations=1,
+                 dump_debug_samples=True,
+                 debug_dump_max_samples=12,
+                 debug_dump_dir='/netscratch/naeem/mmseg_output/eccv_results/Deeplabv3Plus_r50_syn_ohem_loss_dilated_masks',
+                 debug_overlay_alpha=0.5,
+                 **kwargs):
+        if cv2 is None:
+            raise ImportError('cv2 is required for SyclopsDatasetDilatedWeedInstances.')
+
+        self.instance_map_path = instance_map_path
+        self.instance_map_suffix = instance_map_suffix
+        self.dilate_kernel_size = max(1, int(dilate_kernel_size))
+        self.dilate_iterations = max(1, int(dilate_iterations))
+        self.dump_debug_samples = bool(dump_debug_samples)
+        self.debug_dump_max_samples = max(0, int(debug_dump_max_samples))
+        self.debug_dump_dir = debug_dump_dir
+        self.debug_overlay_alpha = float(max(0.0, min(1.0, debug_overlay_alpha)))
+        self._debug_dump_count = 0
+
+        if self.dilate_kernel_size % 2 == 0:
+            self.dilate_kernel_size += 1
+
+        self._kernel = np.ones(
+            (self.dilate_kernel_size, self.dilate_kernel_size), dtype=np.uint8)
+
+        if self.dump_debug_samples and self.debug_dump_max_samples > 0:
+            os.makedirs(self.debug_dump_dir, exist_ok=True)
+
+        super().__init__(
+            img_suffix=img_suffix,
+            seg_map_suffix=seg_map_suffix,
+            reduce_zero_label=False,
+            **kwargs)
+
+    def load_data_list(self):
+        data_list = []
+        img_dir = self.data_prefix.get('img_path', None)
+        ann_dir = self.data_prefix.get('seg_map_path', None)
+
+        for img in fileio.list_dir_or_file(
+                dir_path=img_dir,
+                list_dir=False,
+                suffix=self.img_suffix,
+                recursive=True):
+            stem = img[:-len(self.img_suffix)]
+            data_info = dict(
+                img_path=osp.join(img_dir, img),
+                seg_fields=[])
+            if ann_dir is not None:
+                data_info['seg_map_path'] = osp.join(ann_dir, stem + self.seg_map_suffix)
+            data_info['instance_map_path'] = osp.join(
+                self.instance_map_path, stem + self.instance_map_suffix)
+            data_info['label_map'] = None
+            data_info['reduce_zero_label'] = False
+            data_info['seg_fields'] = []
+            data_list.append(data_info)
+
+        return sorted(data_list, key=lambda x: x['img_path'])
+
+    def _load_npz_array(self, npz_path):
+        with np.load(npz_path) as npz_data:
+            if 'array' in npz_data:
+                array = npz_data['array'].copy()
+            else:
+                first_key = list(npz_data.keys())[0]
+                array = npz_data[first_key].copy()
+        return np.asarray(array).squeeze()
+
+    def _dilate_weed_by_instance(self, seg_map, instance_map):
+        output = seg_map.copy()
+        weed_sem = seg_map == 2
+        weed_instance_ids = np.unique(instance_map[weed_sem])
+        weed_instance_ids = weed_instance_ids[weed_instance_ids > 0]
+
+        for instance_id in weed_instance_ids:
+            instance_area = instance_map == instance_id
+            seed = np.logical_and(instance_area, weed_sem).astype(np.uint8)
+            if seed.sum() == 0:
+                continue
+
+            dilated = cv2.dilate(seed, self._kernel, iterations=self.dilate_iterations) > 0
+            dilated = np.logical_and(dilated, instance_area)
+            output[dilated] = 2
+
+        return output.astype(np.uint8)
+
+    def _mask_to_color(self, seg_map):
+        color = np.zeros((seg_map.shape[0], seg_map.shape[1], 3), dtype=np.uint8)
+        color[seg_map == 0] = np.array([0, 0, 0], dtype=np.uint8)
+        color[seg_map == 1] = np.array([0, 255, 0], dtype=np.uint8)
+        color[seg_map == 2] = np.array([255, 0, 0], dtype=np.uint8)
+        return color
+
+    def _dump_debug(self, img_path, seg_map_dilated):
+        if not self.dump_debug_samples:
+            return
+        if self._debug_dump_count >= self.debug_dump_max_samples:
+            return
+
+        base_name = osp.splitext(osp.basename(img_path))[0]
+        out_prefix = f'{self._debug_dump_count:03d}_{base_name}'
+        color_mask = self._mask_to_color(seg_map_dilated)
+
+        mask_out = osp.join(self.debug_dump_dir, out_prefix + '_dilated_mask.png')
+        Image.fromarray(color_mask).save(mask_out)
+
+        if osp.exists(img_path):
+            rgb = np.array(Image.open(img_path).convert('RGB'), dtype=np.uint8)
+            if rgb.shape[:2] == seg_map_dilated.shape:
+                overlay = (
+                    (1.0 - self.debug_overlay_alpha) * rgb
+                    + self.debug_overlay_alpha * color_mask
+                ).clip(0, 255).astype(np.uint8)
+                overlay_out = osp.join(self.debug_dump_dir, out_prefix + '_overlay.png')
+                Image.fromarray(overlay).save(overlay_out)
+
+        self._debug_dump_count += 1
+
+    def load_annotations(self, img_path, seg_map_path, instance_map_path):
+        img_info = dict(filename=img_path, seg_fields=[])
+        seg_map = self._load_npz_array(seg_map_path).astype(np.uint8)
+        instance_map = self._load_npz_array(instance_map_path).astype(np.int64)
+
+        if seg_map.ndim != 2:
+            raise ValueError(f'Segmentation map should be 2D, got shape {seg_map.shape}')
+        if instance_map.ndim != 2:
+            raise ValueError(f'Instance map should be 2D, got shape {instance_map.shape}')
+        if seg_map.shape != instance_map.shape:
+            raise ValueError(
+                f'Shape mismatch: semantic={seg_map.shape}, instance={instance_map.shape}')
+
+        seg_map_dilated = self._dilate_weed_by_instance(seg_map, instance_map)
+        self._dump_debug(img_path, seg_map_dilated)
+
+        img_info['gt_seg_map'] = seg_map_dilated
+        img_info['seg_fields'].append('gt_seg_map')
+        return img_info
+
+    def get_ann_info(self, idx):
+        data = self.data_list[idx]
+        return self.load_annotations(
+            data['img_path'], data['seg_map_path'], data['instance_map_path'])
