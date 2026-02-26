@@ -69,5 +69,14 @@ test_dataloader = val_dataloader
 #             seg_map_path='test/semantics'),
 #         pipeline=test_pipeline))
 
-val_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'])
+val_evaluator = [
+    dict(type='IoUMetric', iou_metrics=['mIoU']),
+    dict(
+        type='InstanceDetectionMetric',
+        overlap_thr=0.05,
+        overlap_mode='gt',
+        crop_label=1,
+        weed_label=2,
+        instance_map_suffix='.png')
+]
 test_evaluator = val_evaluator

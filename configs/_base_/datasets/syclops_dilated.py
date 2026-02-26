@@ -1,7 +1,7 @@
 # dataset settings
 import os
 dataset_type_train = 'SyclopsDatasetDilatedWeedInstances'
-dataset_type_val = 'SyclopsDataset'
+dataset_type_val = 'SyclopsDatasetDilatedWeedInstances'
 data_root = '/netscratch/naeem/sugarbeet_syn_v6'
 # /home/niqbal/anaconda3/envs/mmseg_310/lib/python3.10/site-packages/mmcv/transforms/loading.py
 # Define your dataset's classes and palette
@@ -25,7 +25,11 @@ test_pipeline = [
     dict(type='LoadImageFromFile'),
     # dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
     dict(type='LoadAnnotations'),
-    dict(type='PackSegInputs')
+    dict(
+        type='PackSegInputs',
+        meta_keys=('img_path', 'seg_map_path', 'instance_map_path',
+                   'ori_shape', 'img_shape', 'pad_shape', 'scale_factor',
+                   'flip', 'flip_direction', 'reduce_zero_label'))
 ]
 
 train_dataloader = dict(
@@ -41,8 +45,8 @@ train_dataloader = dict(
         img_suffix='.png',
         seg_map_suffix='.png',
         instance_map_suffix='.npz',
-        dilate_kernel_size=5,
-        dilate_iterations=1,
+        dilate_kernel_size=10,
+        dilate_iterations=3,
         data_prefix=dict(
             img_path='images/train',
             seg_map_path='main_camera_annotations/semantics/train'),
@@ -57,6 +61,12 @@ val_dataloader = dict(
         type=dataset_type_val,
         data_root=data_root,
         metainfo=dataset_meta,
+        instance_map_path=os.path.join(data_root, 'main_camera_annotations/instance_segmentation'),
+        img_suffix='.png',
+        seg_map_suffix='.png',
+        instance_map_suffix='.npz',
+        dilate_kernel_size=10,
+        dilate_iterations=3,
         data_prefix=dict(
             img_path='images/val',
             seg_map_path='main_camera_annotations/semantics/val'),
@@ -64,5 +74,14 @@ val_dataloader = dict(
 
 test_dataloader = val_dataloader
 
-val_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'])
+val_evaluator = [
+    dict(type='IoUMetric', iou_metrics=['mIoU']),
+    dict(
+        type='InstanceDetectionMetric',
+        overlap_thr=0.05,
+        overlap_mode='gt',
+        crop_label=1,
+        weed_label=2,
+        instance_map_suffix='.npz')
+]
 test_evaluator = val_evaluator
