@@ -13,7 +13,7 @@ dataset_meta = dict(
 train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations'),
-    # dict(type='PhenoBenchReduceClasses'),
+    dict(type='PhenoBenchReduceClasses'),
     dict(type='RandomResize', scale=(1024, 1024), ratio_range=(0.5, 2.0), keep_ratio=True),
     dict(type='RandomCrop', crop_size=(512, 512), cat_max_ratio=0.75),
     dict(type='RandomFlip', prob=0.5),
@@ -23,7 +23,7 @@ train_pipeline = [
 test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations'),
-    # dict(type='PhenoBenchReduceClasses'),
+    dict(type='PhenoBenchReduceClasses'),
     dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
     dict(type='PackSegInputs')
 ]
@@ -73,10 +73,15 @@ val_evaluator = [
     dict(type='IoUMetric', iou_metrics=['mIoU']),
     dict(
         type='InstanceDetectionMetric',
-        overlap_thr=0.05,
+        overlap_thr=0.01,
         overlap_mode='gt',
         crop_label=1,
         weed_label=2,
-        instance_map_suffix='.png')
+        instance_map_path='/netscratch/naeem/phenobench/val/plant_instances',
+        instance_map_suffix='.png',
+        vis_output_dir='/netscratch/naeem/mmseg_output/eccv_results/syn2real_0.01',
+        vis_area_bins=['100_200'],
+        vis_class='weed',
+        show_pred_for_detected_only=True)
 ]
 test_evaluator = val_evaluator
