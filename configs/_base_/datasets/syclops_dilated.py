@@ -82,6 +82,10 @@ val_evaluator = [
         overlap_mode='gt',
         crop_label=1,
         weed_label=2,
-        instance_map_suffix='.npz')
+        instance_map_suffix='.npz',
+        vis_output_dir='/netscratch/naeem/mmseg_output/eccv_results/instance_detection_vis',
+        vis_area_bins=['100_200'],
+        vis_class='weed',
+        show_pred_for_detected_only=True)
 ]
 test_evaluator = val_evaluator

@@ -1,12 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 import os.path as osp
 from collections import OrderedDict
+from datetime import datetime
+import json
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from mmengine.evaluator import BaseMetric
 from mmengine.logging import MMLogger, print_log
+from mmengine.utils import mkdir_or_exist
 from prettytable import PrettyTable
 
 from mmseg.registry import METRICS
@@ -38,6 +42,9 @@ class InstanceDetectionMetric(BaseMetric):
             instance maps when ``instance_map_path`` is not present in sample
             metainfo.
         instance_map_suffix (str): Suffix for instance maps. Default: '.npz'.
+        instance_map_subdirs (Sequence[str]): Candidate subdir names used when
+            inferring instance map path from semantic mask path. Earlier
+            entries have higher priority.
         collect_device (str): 'cpu' or 'gpu'. Default: 'cpu'.
         prefix (str, optional): Metric name prefix.
     """
@@ -61,7 +68,16 @@ class InstanceDetectionMetric(BaseMetric):
                  instance_map_path: Optional[str] = None,
                  instance_map_suffix: Optional[str] = None,
                  auto_instance_suffixes: Sequence[str] = ('.npz', '.png', '.npy'),
+                 instance_map_subdirs: Sequence[str] = ('plant_instances',
+                                                       'instance_segmentation'),
                  resize_instance_to_gt: bool = True,
+                 vis_output_dir: Optional[str] = None,
+                 vis_area_bins: Optional[Sequence[str]] = None,
+                 vis_class: str = 'weed',
+                 show_pred_for_detected_only: bool = True,
+                 vis_gt_alpha: float = 0.45,
+                 vis_pred_alpha: float = 0.35,
+                 vis_per_eval_subdir: bool = True,
                  collect_device: str = 'cpu',
                  prefix: Optional[str] = None,
                  **kwargs) -> None:
@@ -81,8 +97,26 @@ class InstanceDetectionMetric(BaseMetric):
         self.instance_map_path = instance_map_path
         self.instance_map_suffix = instance_map_suffix
         self.auto_instance_suffixes = tuple(auto_instance_suffixes)
+        self.instance_map_subdirs = tuple(instance_map_subdirs)
         self.resize_instance_to_gt = bool(resize_instance_to_gt)
         self.area_bins = tuple(area_bins) if area_bins is not None else self.default_area_bins
+        self.vis_output_dir = vis_output_dir
+        self.vis_area_bins = set(vis_area_bins) if vis_area_bins is not None else None
+        if vis_class not in {'crop', 'weed', 'all'}:
+            raise ValueError(f"vis_class must be one of ['crop', 'weed', 'all'], got {vis_class}.")
+        self.vis_class = vis_class
+        self.show_pred_for_detected_only = bool(show_pred_for_detected_only)
+        self.vis_gt_alpha = float(max(0.0, min(1.0, vis_gt_alpha)))
+        self.vis_pred_alpha = float(max(0.0, min(1.0, vis_pred_alpha)))
+        self.vis_per_eval_subdir = bool(vis_per_eval_subdir)
+        self._vis_sample_index = 0
+        self._vis_initialized = False
+        self._vis_eval_output_dir = None
+        self._vis_count_by_key = OrderedDict()
+        self._vis_manifest = []
+
+        if self.vis_output_dir is not None:
+            mkdir_or_exist(self.vis_output_dir)
 
         self._label_to_name = {
             self.crop_label: 'crop',
@@ -91,6 +125,10 @@ class InstanceDetectionMetric(BaseMetric):
 
     def process(self, data_batch: dict, data_samples: Sequence[dict]) -> None:
         """Process one batch of data and data_samples."""
+        if self.vis_output_dir is not None and not self._vis_initialized:
+            self._prepare_vis_output_dir()
+            self._vis_initialized = True
+
         for data_sample in data_samples:
             pred_label = data_sample['pred_sem_seg']['data'].squeeze().cpu().numpy()
             gt_label = data_sample['gt_sem_seg']['data'].squeeze().cpu().numpy()
@@ -106,8 +144,30 @@ class InstanceDetectionMetric(BaseMetric):
                 instance_map = self._resize_instance_map_nearest(
                     instance_map, target_shape=gt_label.shape)
 
-            sample_stats = self._evaluate_single(pred_label, gt_label, instance_map)
-            self.results.extend(sample_stats)
+            instance_records = self._evaluate_single_records(pred_label, gt_label, instance_map)
+            sample_stats = [
+                dict(
+                    class_name=record['class_name'],
+                    area=record['area'],
+                    detected=record['detected'])
+                for record in instance_records
+            ]
+            # Wrap the list of instances for this image in a single dict
+            # so that mmengine's collect_results counts it as 1 sample.
+            self.results.append({'instances': sample_stats})
+
+            if self.vis_output_dir is not None:
+                img_path = self._resolve_img_path(data_sample)
+                if img_path is not None and osp.exists(img_path):
+                    rgb_image = self._load_rgb_image(img_path)
+                    if rgb_image.shape[:2] != gt_label.shape:
+                        rgb_image = self._resize_rgb_nearest(rgb_image, gt_label.shape)
+                    self._dump_visualizations(
+                        img_path=img_path,
+                        rgb_image=rgb_image,
+                        pred_label=pred_label,
+                        instance_records=instance_records)
+        # print('hold')
 
     def compute_metrics(self, results: list) -> Dict[str, float]:
         """Compute metrics from processed results."""
@@ -130,7 +190,12 @@ class InstanceDetectionMetric(BaseMetric):
             'weed': OrderedDict((self._bin_name(b), 0) for b in self.area_bins),
         }
 
-        for item in results:
+        # Flatten the per-image instance lists back into a single list
+        flat_results = []
+        for res in results:
+            flat_results.extend(res.get('instances', []))
+
+        for item in flat_results:
             class_name = item['class_name']
             detected = int(item['detected'])
             area = int(item['area'])
@@ -187,10 +252,42 @@ class InstanceDetectionMetric(BaseMetric):
                 rounded_metrics[key] = round(value, 2)
             else:
                 rounded_metrics[key] = value
+
+        self._log_visualization_audit(logger=logger, results=flat_results)
+
+        self._vis_initialized = False
+        self._vis_sample_index = 0
+        self._vis_count_by_key = OrderedDict()
+        self._vis_manifest = []
         return rounded_metrics
+
+    def _prepare_vis_output_dir(self) -> None:
+        if self.vis_output_dir is None:
+            self._vis_eval_output_dir = None
+            return
+
+        if self.vis_per_eval_subdir:
+            stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            self._vis_eval_output_dir = osp.join(
+                self.vis_output_dir, f'eval_{stamp}_pid{os.getpid()}')
+        else:
+            self._vis_eval_output_dir = self.vis_output_dir
+
+        mkdir_or_exist(self._vis_eval_output_dir)
+        logger: MMLogger = MMLogger.get_current_instance()
+        print_log(f'instance detection visualizations will be saved to: {self._vis_eval_output_dir}',
+                  logger=logger)
 
     def _evaluate_single(self, pred_label: np.ndarray, gt_label: np.ndarray,
                          instance_map: np.ndarray) -> List[dict]:
+        records = self._evaluate_single_records(pred_label, gt_label, instance_map)
+        return [
+            dict(class_name=record['class_name'], area=record['area'], detected=record['detected'])
+            for record in records
+        ]
+
+    def _evaluate_single_records(self, pred_label: np.ndarray, gt_label: np.ndarray,
+                                 instance_map: np.ndarray) -> List[dict]:
         sample_stats = []
         instance_ids = np.unique(instance_map)
         instance_ids = instance_ids[instance_ids > 0]
@@ -214,14 +311,178 @@ class InstanceDetectionMetric(BaseMetric):
                 union = int(np.logical_or(inst_mask, pred_mask_cls).sum())
                 overlap = inter / float(union) if union > 0 else 0.0
 
+            bin_name = self._area_to_bin(area)
+
             sample_stats.append(
                 dict(
+                    instance_id=int(instance_id),
                     class_name=class_name,
+                    class_label=class_label,
                     area=area,
                     detected=overlap >= self.overlap_thr,
+                    overlap=overlap,
+                    bin_name=bin_name,
+                    inst_mask=inst_mask,
                 ))
 
         return sample_stats
+
+    def _resolve_img_path(self, data_sample: dict) -> Optional[str]:
+        img_path = data_sample.get('img_path', None)
+        if img_path is None and hasattr(data_sample, 'metainfo'):
+            img_path = data_sample.metainfo.get('img_path', None)
+        return img_path
+
+    def _load_rgb_image(self, img_path: str) -> np.ndarray:
+        return np.array(Image.open(img_path).convert('RGB'), dtype=np.uint8)
+
+    def _dump_visualizations(self,
+                             img_path: str,
+                             rgb_image: np.ndarray,
+                             pred_label: np.ndarray,
+                             instance_records: List[dict]) -> None:
+        basename = osp.splitext(osp.basename(img_path))[0]
+
+        for record in instance_records:
+            if not self._should_visualize_record(record):
+                continue
+
+            class_name = record['class_name']
+            detected = bool(record['detected'])
+            bin_name = record['bin_name']
+            status = 'detected' if detected else 'missed'
+
+            vis_root = self._vis_eval_output_dir or self.vis_output_dir
+            out_dir = osp.join(vis_root, bin_name, class_name, status)
+            mkdir_or_exist(out_dir)
+
+            vis_img = self._compose_instance_visual(
+                rgb_image=rgb_image,
+                pred_label=pred_label,
+                record=record)
+
+            out_name = (
+                f'{self._vis_sample_index:08d}_{basename}_inst{record["instance_id"]}'
+                f'_area{record["area"]}_{status}.png')
+            out_path = osp.join(out_dir, out_name)
+            Image.fromarray(vis_img).save(out_path)
+
+            count_key = (bin_name, class_name, status)
+            self._vis_count_by_key[count_key] = self._vis_count_by_key.get(count_key, 0) + 1
+            self._vis_manifest.append(dict(
+                path=out_path,
+                bin_name=bin_name,
+                class_name=class_name,
+                status=status,
+                area=int(record['area']),
+                instance_id=int(record['instance_id']),
+                overlap=float(record['overlap']),
+            ))
+            self._vis_sample_index += 1
+
+    def _should_visualize_record(self, record: dict) -> bool:
+        if self.vis_area_bins is not None and record['bin_name'] not in self.vis_area_bins:
+            return False
+
+        if self.vis_class != 'all' and record['class_name'] != self.vis_class:
+            return False
+        return True
+
+    def _compose_instance_visual(self,
+                                 rgb_image: np.ndarray,
+                                 pred_label: np.ndarray,
+                                 record: dict) -> np.ndarray:
+        base = np.asarray(rgb_image, dtype=np.uint8).copy()
+        inst_mask = record['inst_mask']
+
+        if record['class_name'] == 'weed':
+            gt_color = np.array([255, 0, 0], dtype=np.uint8)
+        else:
+            gt_color = np.array([0, 255, 0], dtype=np.uint8)
+        pred_color = np.array([0, 0, 255], dtype=np.uint8)
+
+        base[inst_mask] = (
+            (1.0 - self.vis_gt_alpha) * base[inst_mask]
+            + self.vis_gt_alpha * gt_color
+        ).astype(np.uint8)
+
+        draw_pred = (not self.show_pred_for_detected_only) or bool(record['detected'])
+        if draw_pred:
+            pred_mask_cls = pred_label == record['class_label']
+            pred_on_instance = np.logical_and(pred_mask_cls, inst_mask)
+            base[pred_on_instance] = (
+                (1.0 - self.vis_pred_alpha) * base[pred_on_instance]
+                + self.vis_pred_alpha * pred_color
+            ).astype(np.uint8)
+
+        ys, xs = np.where(inst_mask)
+        y1, y2 = int(ys.min()), int(ys.max())
+        x1, x2 = int(xs.min()), int(xs.max())
+
+        pil_img = Image.fromarray(base)
+        drawer = ImageDraw.Draw(pil_img)
+        edge_color = (255, 255, 255)
+        drawer.rectangle([(x1, y1), (x2, y2)], outline=edge_color, width=2)
+
+        status = 'detected' if record['detected'] else 'missed'
+        text = (
+            f'{record["class_name"]} | area={record["area"]} px | '
+            f'bin={record["bin_name"]} | {status} | ov={record["overlap"]:.3f}')
+        text_x = x1
+        text_y = max(0, y1 - 14)
+        drawer.rectangle([(text_x, text_y), (min(text_x + 820, base.shape[1] - 1), text_y + 14)], fill=(0, 0, 0))
+        drawer.text((text_x + 2, text_y), text, fill=(255, 255, 255))
+        return np.array(pil_img, dtype=np.uint8)
+
+    def _log_visualization_audit(self, logger: MMLogger, results: list) -> None:
+        if self.vis_output_dir is None:
+            return
+
+        vis_root = self._vis_eval_output_dir or self.vis_output_dir
+
+        if len(self._vis_manifest) > 0:
+            manifest_path = osp.join(vis_root, 'manifest.json')
+            with open(manifest_path, 'w') as f:
+                json.dump(self._vis_manifest, f, indent=2)
+            print_log(f'instance detection visualization manifest: {manifest_path}', logger=logger)
+
+        selected_total = 0
+        selected_detected = 0
+        for item in results:
+            class_name = item['class_name']
+            if self.vis_class != 'all' and class_name != self.vis_class:
+                continue
+            bin_name = self._area_to_bin(int(item['area']))
+            if self.vis_area_bins is not None and bin_name not in self.vis_area_bins:
+                continue
+            selected_total += 1
+            selected_detected += int(item['detected'])
+
+        saved_detected = 0
+        saved_missed = 0
+        for (bin_name, class_name, status), count in self._vis_count_by_key.items():
+            if self.vis_area_bins is not None and bin_name not in self.vis_area_bins:
+                continue
+            if self.vis_class != 'all' and class_name != self.vis_class:
+                continue
+            if status == 'detected':
+                saved_detected += count
+            else:
+                saved_missed += count
+        saved_total = saved_detected + saved_missed
+
+        print_log(
+            'instance detection vis audit: '
+            f'expected_total={selected_total}, expected_detected={selected_detected}, '
+            f'expected_missed={selected_total - selected_detected}, '
+            f'saved_total={saved_total}, saved_detected={saved_detected}, saved_missed={saved_missed}',
+            logger=logger)
+
+        if saved_total != selected_total:
+            print_log(
+                'WARNING: visualization count mismatch detected for current eval run. '
+                'Check manifest.json for exact saved entries.',
+                logger=logger)
 
     def _instance_class(self, inst_mask: np.ndarray,
                         gt_label: np.ndarray) -> Tuple[Optional[str], Optional[int]]:
@@ -303,10 +564,11 @@ class InstanceDetectionMetric(BaseMetric):
         seg_no_ext = osp.splitext(seg_map_path)[0]
 
         if self.instance_map_suffix is not None:
-            candidates = [
-                seg_no_ext.replace('/semantics/', '/instance_segmentation/') + self.instance_map_suffix,
-                seg_no_ext.replace('/semantics/', '/plant_instances/') + self.instance_map_suffix,
-            ]
+            candidates = []
+            for subdir in self.instance_map_subdirs:
+                candidates.append(
+                    seg_no_ext.replace('/semantics/', f'/{subdir}/')
+                    + self.instance_map_suffix)
             for candidate in candidates:
                 if osp.exists(candidate):
                     return candidate
@@ -314,8 +576,9 @@ class InstanceDetectionMetric(BaseMetric):
 
         candidates = []
         for suffix in self.auto_instance_suffixes:
-            candidates.append(seg_no_ext.replace('/semantics/', '/instance_segmentation/') + suffix)
-            candidates.append(seg_no_ext.replace('/semantics/', '/plant_instances/') + suffix)
+            for subdir in self.instance_map_subdirs:
+                candidates.append(
+                    seg_no_ext.replace('/semantics/', f'/{subdir}/') + suffix)
 
         for candidate in candidates:
             if osp.exists(candidate):
@@ -335,6 +598,14 @@ class InstanceDetectionMetric(BaseMetric):
         y_idx = np.clip(y_idx, 0, src_h - 1)
         x_idx = np.clip(x_idx, 0, src_w - 1)
         return instance_map[y_idx[:, None], x_idx[None, :]].astype(np.int64)
+
+    @staticmethod
+    def _resize_rgb_nearest(rgb_image: np.ndarray,
+                            target_shape: Tuple[int, int]) -> np.ndarray:
+        dst_h, dst_w = target_shape
+        pil_img = Image.fromarray(rgb_image)
+        pil_img = pil_img.resize((dst_w, dst_h), resample=Image.BILINEAR)
+        return np.array(pil_img, dtype=np.uint8)
 
     def _area_to_bin(self, area: int) -> str:
         for area_bin in self.area_bins:
