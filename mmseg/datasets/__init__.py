@@ -8,6 +8,7 @@ from .cityscapes import CityscapesDataset
 from .coco_stuff import COCOStuffDataset
 from .dark_zurich import DarkZurichDataset
 from .dataset_wrappers import MultiImageMixDataset
+from .combined_dataset import CombinedDataset
 from .decathlon import DecathlonDataset
 from .drive import DRIVEDataset
 from .dsdl import DSDLSegDataset
@@ -71,5 +72,6 @@ __all__ = [
     'CropAndWeedDataset', 'PhenobenchDatasetRegionBased',
     'SyclopsDataset', 'SyclopsDatasetCS', 'SyclopsDatasetDilatedWeedInstances',
     'PhenobenchDataset', 'PhenobenchDatasetAL', 'PhenobenchDatasetCopyPasteWeed',
+    'CombinedDataset',
     'ActiveMixerDataset', 'WeedsGalore'
 ]

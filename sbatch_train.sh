@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=mmseg_training
-#SBATCH --partition=RTX3090
-#SBATCH --mem=40G
+#SBATCH --partition=RTXA6000
+#SBATCH --mem=60G
 #SBATCH --cpus-per-task=5
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
-#SBATCH --mail-type=BEGIN,END
+#SBATCH --mail-type=END
 #SBATCH --mail-user=naeem.iqbal@dfki.de
 
 # This script takes two arguments:
@@ -39,5 +39,5 @@ srun \
   --container-mounts=/netscratch/naeem:/netscratch/naeem,/home/iqbal/mmsegmentation:/home/iqbal/mmsegmentation,/ds/images/cropandweed:/ds/images/cropandweed,/home/iqbal/mmengine:/home/iqbal/mmengine,/home/iqbal/mmdetection:/home/iqbal/mmdetection \
   --container-image=/netscratch/naeem/mmseg_23.09_09_2025_ADA.sqsh  \
   --container-workdir=/home/iqbal/mmsegmentation \
-  --time=00-14:00 \
-  bash -c "source ~/miniconda3/bin/activate && conda activate mmseg && pip install albumentations>=0.3.2 && python3 tools/train.py ${CONFIG_FILE} --work-dir ${WORK_DIR} --eval-after-training"
+  --time=00-08:00 \
+  bash -c "source ~/miniconda3/bin/activate && conda activate mmseg && pip install albumentations>=0.3.2 && export REAL_SUBSET_RATIO=0.01 && python3 tools/train.py ${CONFIG_FILE} --work-dir ${WORK_DIR} --eval-after-training"
