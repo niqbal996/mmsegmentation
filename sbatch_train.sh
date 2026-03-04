@@ -8,12 +8,14 @@
 #SBATCH --mail-type=END
 #SBATCH --mail-user=naeem.iqbal@dfki.de
 
-# This script takes two arguments:
+# This script takes two required arguments and one optional argument:
 # 1. The config file path
 # 2. The work directory (output directory)
+# 3. REAL_SUBSET_RATIO (optional)
 
 CONFIG_FILE=$1
 WORK_DIR=$2
+REAL_SUBSET_RATIO=${3:-}
 
 # Check if arguments are provided
 if [ -z "$CONFIG_FILE" ] || [ -z "$WORK_DIR" ]; then
@@ -34,10 +36,20 @@ JOB_NAME=$(basename "$WORK_DIR")
 
 echo "✅ Starting training job for config: $CONFIG_FILE"
 echo "✅ Output will be saved to: $WORK_DIR"
+if [ -n "$REAL_SUBSET_RATIO" ]; then
+  echo "✅ REAL_SUBSET_RATIO: $REAL_SUBSET_RATIO"
+else
+  echo "✅ REAL_SUBSET_RATIO: not set (config-only run)"
+fi
+
+TRAIN_CMD="python3 tools/train.py ${CONFIG_FILE} --work-dir ${WORK_DIR} --eval-after-training"
+if [ -n "$REAL_SUBSET_RATIO" ]; then
+  TRAIN_CMD="export REAL_SUBSET_RATIO=${REAL_SUBSET_RATIO} && ${TRAIN_CMD}"
+fi
 
 srun \
   --container-mounts=/netscratch/naeem:/netscratch/naeem,/home/iqbal/mmsegmentation:/home/iqbal/mmsegmentation,/ds/images/cropandweed:/ds/images/cropandweed,/home/iqbal/mmengine:/home/iqbal/mmengine,/home/iqbal/mmdetection:/home/iqbal/mmdetection \
   --container-image=/netscratch/naeem/mmseg_23.09_09_2025_ADA.sqsh  \
   --container-workdir=/home/iqbal/mmsegmentation \
   --time=00-08:00 \
-  bash -c "source ~/miniconda3/bin/activate && conda activate mmseg && pip install albumentations>=0.3.2 && export REAL_SUBSET_RATIO=0.01 && python3 tools/train.py ${CONFIG_FILE} --work-dir ${WORK_DIR} --eval-after-training"
+  bash -c "source ~/miniconda3/bin/activate && conda activate mmseg && pip install albumentations>=0.3.2 && ${TRAIN_CMD}"

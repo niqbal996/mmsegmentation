@@ -19,35 +19,68 @@ declare -a trainings=(
     # "configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_combined_ohem_loss_test_real_pretrained.py;/netscratch/naeem/mmseg_output/eccv_results/Deeplabv3Plus_r50_phenobench_combined_b4_50_50_real_1_percent_test_real_pretrained"
     # "configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_combined_ohem_loss_test_syn_pretrained.py;/netscratch/naeem/mmseg_output/eccv_results/Deeplabv3Plus_r50_phenobench_combined_b4_50_50_real_1_percent_test_syn_pretrained/"
     # "configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench_ohem_loss.py;/netscratch/naeem/mmseg_output/eccv_results/Deeplabv3Plus_r50_phenobench_ohem_loss"
-    "configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench_subset_ohem_loss.py;/netscratch/naeem/mmseg_output/eccv_results/Deeplabv3Plus_r50_phenobench_subset_ohem_loss/"
+    # "configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench_subset_ohem_loss.py;/netscratch/naeem/mmseg_output/eccv_results/Deeplabv3Plus_r50_phenobench_subset_ohem_loss/"
+    # "configs/segformer/segformer_mit-b5_4xb1-30k_phenobench-1024x1024_ce_loss_baseline.py;/netscratch/naeem/mmseg_output/eccv_results/SegFormer_experiments/SegFormer_mit-b5_phenobench_ce_loss_baseline/"
+    # "configs/segformer/segformer_mit-b5_4xb1-30k_phenobench-1024x1024_ohem_loss_baseline.py;/netscratch/naeem/mmseg_output/eccv_results/SegFormer_experiments/SegFormer_mit-b5_phenobench_ohem_loss_baseline/"
+    # "configs/segformer/segformer_mit-b5_4xb1-30k_syn_v6-1024x1024_ce_loss_baseline.py;/netscratch/naeem/mmseg_output/eccv_results/SegFormer_experiments/SegFormer_mit-b5_synthetic_ce_loss_baseline/"
+    # "configs/segformer/segformer_mit-b5_4xb1-30k_syn_v6-1024x1024_ohem_loss_baseline.py;/netscratch/naeem/mmseg_output/eccv_results/SegFormer_experiments/SegFormer_mit-b5_synthetic_ohem_loss_baseline/"
+    "configs/segformer/segformer_mit-b5_4xb1-30k_phenobench-1024x1024_ohem_loss_subsets.py;/netscratch/naeem/mmseg_output/eccv_results/SegFormer_experiments/SegFormer_mit-b5_phenobench_ohem_loss_subsets/"
+    "configs/segformer/segformer_mit-b5_4xb1-30k_mixed-1024x1024_ohem_loss_test_syn.py;/netscratch/naeem/mmseg_output/eccv_results/SegFormer_experiments/SegFormer_mit-b5_combined_phenobench_test_syn_ohem_loss/"
+    "configs/segformer/segformer_mit-b5_4xb1-30k_mixed-1024x1024_ohem_loss_test_real.py;/netscratch/naeem/mmseg_output/eccv_results/SegFormer_experiments/SegFormer_mit-b5_combined_phenobench_test_real_ohem_loss/"
 )
 
 # REAL_SUBSET_RATIO sweep values
 declare -a subset_ratios=(0.01 0.05 0.1)
 
-# Loop through the trainings array and schedule jobs for each subset ratio
+# Set to true to run REAL_SUBSET_RATIO sweep, false to run config-only jobs.
+SWEEP_REAL_SUBSET_RATIO=true
+
+# Loop through the trainings array and schedule jobs
 for training in "${trainings[@]}"; do
     IFS=';' read -r config_file work_dir <<< "$training"
 
-    for ratio in "${subset_ratios[@]}"; do
-        ratio_tag=${ratio/./p}
-        ratio_work_dir="${work_dir%/}/real_subset_${ratio_tag}"
-        job_name="$(basename "${work_dir%/}")_r${ratio_tag}"
+    if [ "$SWEEP_REAL_SUBSET_RATIO" = true ]; then
+        for ratio in "${subset_ratios[@]}"; do
+            ratio_tag=${ratio/./p}
+            ratio_work_dir="${work_dir%/}/real_subset_${ratio_tag}"
+            job_name="$(basename "${work_dir%/}")_r${ratio_tag}"
 
-        mkdir -p "$ratio_work_dir"
+            mkdir -p "$ratio_work_dir"
+
+            echo "Scheduling training for config: $config_file"
+            echo "Output directory: $ratio_work_dir"
+            echo "REAL_SUBSET_RATIO: $ratio"
+
+            sbatch \
+                --job-name="$job_name" \
+                --output="${ratio_work_dir}/slurm-%j.out" \
+                --error="${ratio_work_dir}/slurm-%j.err" \
+                sbatch_train_subset_ratio.sh "$config_file" "$ratio_work_dir" "$ratio"
+
+            echo "--------------------------------------------------"
+        done
+    else
+        base_work_dir="${work_dir%/}"
+        job_name="$(basename "$base_work_dir")"
+
+        mkdir -p "$base_work_dir"
 
         echo "Scheduling training for config: $config_file"
-        echo "Output directory: $ratio_work_dir"
-        echo "REAL_SUBSET_RATIO: $ratio"
+        echo "Output directory: $base_work_dir"
+        echo "REAL_SUBSET_RATIO: not set (config-only run)"
 
         sbatch \
             --job-name="$job_name" \
-            --output="${ratio_work_dir}/slurm-%j.out" \
-            --error="${ratio_work_dir}/slurm-%j.err" \
-            sbatch_train_subset_ratio.sh "$config_file" "$ratio_work_dir" "$ratio"
+            --output="${base_work_dir}/slurm-%j.out" \
+            --error="${base_work_dir}/slurm-%j.err" \
+            sbatch_train.sh "$config_file" "$base_work_dir"
 
         echo "--------------------------------------------------"
-    done
+    fi
 done
 
-echo "All training jobs have been scheduled for REAL_SUBSET_RATIO sweep: ${subset_ratios[*]}"
+if [ "$SWEEP_REAL_SUBSET_RATIO" = true ]; then
+    echo "All training jobs have been scheduled for REAL_SUBSET_RATIO sweep: ${subset_ratios[*]}"
+else
+    echo "All training jobs have been scheduled in config-only mode."
+fi

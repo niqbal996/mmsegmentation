@@ -108,4 +108,18 @@ val_dataloader = dict(
 test_dataloader = val_dataloader
 
 val_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'])
+# val_evaluator = [
+#     dict(type='IoUMetric', iou_metrics=['mIoU']),
+#     dict(
+#         type='InstanceDetectionMetric',
+#         overlap_thr=0.05,
+#         overlap_mode='gt',
+#         crop_label=1,
+#         weed_label=2,
+#         instance_map_suffix='.npz',
+#         vis_output_dir='/netscratch/naeem/mmseg_output/eccv_results/instance_detection_vis',
+#         vis_area_bins=['100_200'],
+#         vis_class='weed',
+#         show_pred_for_detected_only=True)
+# ]
 test_evaluator = val_evaluator
