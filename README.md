@@ -20,15 +20,19 @@ python3 tools/train.py --config-file configs/deeplabv3plus/deeplabv3plus_r50-d8_
 
 # Model Zoo 
 
-| Model Name | Config Name | Weed IoU | Crop IoU | Tiny Recall | Model Checkpoint Link |
-|---|---|---:|---:|---:|---|
-| DeepLabV3+ R50 (Synthetic Baseline) | [deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26.py](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26.py) | - | - | - | TBD |
-| DeepLabV3+ R50 (Pheno Test) | [deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26_pheno_test.py](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26_pheno_test.py) | - | - | - | TBD |
-| DeepLabV3+ R50 (OHEM Loss) | [deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26_pheno_test_ohem_loss.py](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26_pheno_test_ohem_loss.py) | - | - | - | TBD |
-| DeepLabV3+ R50 (Focal Loss) | [deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26_pheno_test_focal.py](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26_pheno_test_focal.py) | - | - | - | TBD |
-| DeepLabV3+ R50 (Focal + Class Weight) | [deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26_pheno_test_focal_class_weighted.py](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26_pheno_test_focal_class_weighted.py) | - | - | - | TBD |
-| DeepLabV3+ R50 (Focal + Dilated ASPP) | [deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26_pheno_test_focal_loss_dilated.py](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26_pheno_test_focal_loss_dilated.py) | - | - | - | TBD |
-| SegFormer MiT-B5 (Synthetic CE) | [segformer_mit-b5_4xb1-30k_syn_v6-1024x1024_ce_loss_baseline.py](configs/segformer/segformer_mit-b5_4xb1-30k_syn_v6-1024x1024_ce_loss_baseline.py) | - | - | - | TBD |
-| SegFormer MiT-B5 (Synthetic OHEM) | [segformer_mit-b5_4xb1-30k_syn_v6-1024x1024_ohem_loss_baseline.py](configs/segformer/segformer_mit-b5_4xb1-30k_syn_v6-1024x1024_ohem_loss_baseline.py) | - | - | - | TBD |
-| Mask2Former R50 (Mixed) | [mask2former_r50_active_mixing-512x512.py](configs/mask2former/mask2former_r50_active_mixing-512x512.py) | - | - | - | TBD |
+| Model Name | Train/val | config | Weed IoU | Crop IoU | Tiny Recall | Model Checkpoint Link |
+|---|---|---|---:|---:|---:|---|
+| DeepLabV3+ R50  | SS / Ph | [config](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26_pheno_test.py) | 47.54 | 89.90 | 14.34 | TBD |
+| DeepLabV3+ R50  | SS / SS | [config](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26.py) | 25.45 | 85.97 | 77.81 | TBD |
+| DeepLabV3+ R50  | Ph / Ph | [config](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic26_pheno_test_ohem_loss.py) | 69.47 | 94.12 | 64.75 | TBD |
+| DeepLabV3+ R50  | SS + Ph 1% / Ph | [config](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_combined_ohem_loss_test_real.py) | 63.34 | 94.22 | 59.19 | TBD |
+| DeepLabV3+ R50  | SS + Ph 5% / Ph | [config](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_combined_ohem_loss_test_real.py) | 69.68 | 95.07 | 65.05 | TBD |
+| DeepLabV3+ R50  | SS + Ph 10% / Ph | [config](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_combined_ohem_loss_test_real.py) | 70.41 | 95.32 | 73.94 | TBD |
+| DeepLabV3+ R50  | SS + Ph 1% / SS | [config](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_combined_ohem_loss_test_syn.py) | 61.32 | 94.06 | 60.20 | TBD |
+| DeepLabV3+ R50  | SS + Ph 5% / SS | [config](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_combined_ohem_loss_test_syn.py) | 67.56 | 94.96 | 73.74 | TBD |
+| DeepLabV3+ R50  | SS + Ph 10% / SS | [config](configs/deeplabv3plus/deeplabv3plus_r50-d8_8xb1-30k_1024x1024_combined_ohem_loss_test_syn.pyy) | 68.96 | 95.18 | 78.79 | TBD |
 
+# TODO 
+
+- [ ] Add model checkpoints for the respective configs.
+- [ ] Add slurm config for each experiment set.
