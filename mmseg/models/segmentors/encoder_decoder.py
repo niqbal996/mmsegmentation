@@ -237,7 +237,8 @@ class EncoderDecoder(BaseSegmentor):
         """
         x = self.extract_feat(inputs)
         # TODO maybe this is not needed anymore? 
-        return self.decode_head.forward(x, batch_data_samples=data_samples)
+        # return self.decode_head.forward(x, batch_data_samples=data_samples)
+        return self.decode_head.forward(x)
 
     def slide_inference(self, inputs: Tensor,
                         batch_img_metas: List[dict]) -> Tensor:
@@ -268,6 +269,8 @@ class EncoderDecoder(BaseSegmentor):
         w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
         preds = inputs.new_zeros((batch_size, out_channels, h_img, w_img))
         count_mat = inputs.new_zeros((batch_size, 1, h_img, w_img))
+        # Preserve original metainfo to restore after each crop
+        original_batch_img_metas = [meta.copy() for meta in batch_img_metas]
         for h_idx in range(h_grids):
             for w_idx in range(w_grids):
                 y1 = h_idx * h_stride
@@ -277,11 +280,26 @@ class EncoderDecoder(BaseSegmentor):
                 y1 = max(y2 - h_crop, 0)
                 x1 = max(x2 - w_crop, 0)
                 crop_img = inputs[:, :, y1:y2, x1:x2]
-                # change the image shape to patch shape
-                batch_img_metas[0]['img_shape'] = crop_img.shape[2:]
+                # Update ALL metas to reflect the crop (Mask2Former relies on these).
+                for meta in batch_img_metas:
+                    meta['ori_shape'] = crop_img.shape[2:]
+                    meta['img_shape'] = crop_img.shape[2:]
+                    meta['pad_shape'] = crop_img.shape[2:]
+                    meta['padding_size'] = [0, 0, 0, 0]
                 # the output of encode_decode is seg logits tensor map
                 # with shape [N, C, H, W]
                 crop_seg_logit = self.encode_decode(crop_img, batch_img_metas)
+                # Restore original metas for next iteration
+                for i, meta in enumerate(batch_img_metas):
+                    # Only restore keys if they existed originally
+                    for k in ['ori_shape', 'img_shape', 'pad_shape', 'padding_size']:
+                        if k in original_batch_img_metas[i]:
+                            meta[k] = original_batch_img_metas[i][k]
+                # Guard: some heads (e.g. Mask2Former) may still output full image size.
+                expected_h = y2 - y1
+                expected_w = x2 - x1
+                if crop_seg_logit.shape[2] != expected_h or crop_seg_logit.shape[3] != expected_w:
+                    crop_seg_logit = crop_seg_logit[:, :, :expected_h, :expected_w]
                 preds += F.pad(crop_seg_logit,
                                (int(x1), int(preds.shape[3] - x2), int(y1),
                                 int(preds.shape[2] - y2)))

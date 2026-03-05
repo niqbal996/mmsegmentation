@@ -1,7 +1,7 @@
 dataset_type_train = 'PhenobenchDataset'
 data_root_train = '/netscratch/naeem/phenobench'
 dataset_type_val = 'PhenobenchDataset'
-data_root_val = '/mnt/e/datasets/cropandweed_dataset/'
+data_root_val = '/ds/images/cropandweed/cityscapes_phenobench_format'
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('Soil', 'Sugarbeet', 'Weeds'),
@@ -22,12 +22,6 @@ train_pipeline = [
 test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations'),
-    dict(type='albu_style_transfer', 
-         target_image_list=[
-        '/mnt/e/datasets/cropandweed_dataset/images/ave-0186-0007.jpg',             
-        '/mnt/e/datasets/cropandweed_dataset/images/ave-0215-0021.jpg',
-        '/mnt/e/datasets/cropandweed_dataset/images/ave-0346-0014.jpg',
-        ]),
     dict(type='PackSegInputs')
 ]
 
@@ -60,8 +54,8 @@ val_dataloader = dict(
         seg_map_suffix='.png',
         # indices=list(range(0, 100)),  # Use a subset of val images for quick eval
         data_prefix=dict(
-            img_path='images',
-            seg_map_path='labelIds/PhenoID'),
+            img_path='leftImg8bit',
+            seg_map_path='gtFine'),
         pipeline=test_pipeline))
 
 
@@ -69,6 +63,6 @@ test_dataloader = val_dataloader
 
 val_evaluator = dict(type='IoUMetric', 
                      iou_metrics=['mIoU'],
-                     ignore_index=1,
+                    #  ignore_index=1,
                      )
 test_evaluator = val_evaluator
