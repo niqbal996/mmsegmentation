@@ -3,9 +3,8 @@ import os
 dataset_type_train = 'SyclopsDataset'
 dataset_type_val = 'PhenobenchDataset'
 
-data_root_train = '/netscratch/naeem/sugarbeet_syn_v6'
-data_root_val = '/netscratch/naeem/phenobench'
-# /home/niqbal/anaconda3/envs/mmseg_310/lib/python3.10/site-packages/mmcv/transforms/loading.py
+data_root_train = '/path/to/sugarbeetsynthetic2026/root/'
+data_root_val = '/path/to/phenobench/root/'
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('background', 'crop', 'weed'),

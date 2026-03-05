@@ -1,6 +1,6 @@
 import os
 dataset_type = 'PhenobenchDatasetAL'
-data_root = '/netscratch/naeem/phenobench/'
+data_root = '/path/to/phenobench/root/'
 
 # Define your dataset's classes and palette
 dataset_meta = dict(
@@ -77,9 +77,9 @@ val_evaluator = [
         overlap_mode='gt',
         crop_label=1,
         weed_label=2,
-        instance_map_path='/netscratch/naeem/phenobench/val/plant_instances',
+        instance_map_path='/path/to/phenobench/root/val/plant_instances',
         instance_map_suffix='.png',
-        vis_output_dir='/netscratch/naeem/mmseg_output/eccv_results/syn2real_0.01',
+        vis_output_dir='/path/to/mmseg_output/eccv_results/syn2real_0.01',
         vis_area_bins=['100_200'],
         vis_class='weed',
         show_pred_for_detected_only=True)

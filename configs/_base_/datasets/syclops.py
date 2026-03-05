@@ -2,8 +2,7 @@
 import os
 dataset_type = 'SyclopsDataset'
 
-data_root = '/netscratch/naeem/sugarbeet_syn_v6'
-# /home/niqbal/anaconda3/envs/mmseg_310/lib/python3.10/site-packages/mmcv/transforms/loading.py
+data_root = '/path/to/sugarbeetsynthetic2026/root/'
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('background', 'crop', 'weed'),
@@ -69,7 +68,7 @@ val_evaluator = [
         crop_label=1,
         weed_label=2,
         instance_map_suffix='.npz',
-        vis_output_dir='/netscratch/naeem/mmseg_output/eccv_results/instance_detection_vis',
+        vis_output_dir='/path/to/mmseg_output/eccv_results/instance_detection_vis',
         vis_area_bins=['100_200'],
         vis_class='weed',
         show_pred_for_detected_only=True)

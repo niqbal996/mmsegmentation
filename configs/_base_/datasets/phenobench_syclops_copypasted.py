@@ -1,8 +1,8 @@
 import os
 dataset_type_train = 'PhenobenchDatasetCopyPasteWeed'
 dataset_type_val = 'PhenobenchDataset'
-data_root = '/netscratch/naeem/phenobench/'
-syn_data_root = '/netscratch/naeem/sugarbeet_syn_v6/'
+data_root = '/path/to/phenobench/root/'
+syn_data_root = '/path/to/sugarbeetsynthetic2026/root/'
 
 
 # Define your dataset's classes and palette

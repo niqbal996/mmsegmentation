@@ -4,8 +4,8 @@ import os
 synthetic_dataset_type = 'SyclopsDataset'
 real_dataset_type = 'PhenobenchDataset'
 
-data_root_synthetic = '/netscratch/naeem/sugarbeet_syn_v6'
-data_root_real = '/netscratch/naeem/phenobench'
+data_root_synthetic = '/path/to/sugarbeetsynthetic2026/root/'
+data_root_real = '/path/to/phenobench/root/'
 
 batch_size = int(os.environ.get('TRAIN_BATCH_SIZE', 4))
 real_subset_ratio = float(os.environ.get('REAL_SUBSET_RATIO', 0.05))
@@ -108,18 +108,4 @@ val_dataloader = dict(
 test_dataloader = val_dataloader
 
 val_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'])
-# val_evaluator = [
-#     dict(type='IoUMetric', iou_metrics=['mIoU']),
-#     dict(
-#         type='InstanceDetectionMetric',
-#         overlap_thr=0.05,
-#         overlap_mode='gt',
-#         crop_label=1,
-#         weed_label=2,
-#         instance_map_suffix='.npz',
-#         vis_output_dir='/netscratch/naeem/mmseg_output/eccv_results/instance_detection_vis',
-#         vis_area_bins=['100_200'],
-#         vis_class='weed',
-#         show_pred_for_detected_only=True)
-# ]
 test_evaluator = val_evaluator
