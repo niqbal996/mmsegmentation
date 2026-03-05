@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/segformer_mit-b0.py',
-    '../_base_/datasets/combined_syclops_phenobench_test_real.py',
+    '../_base_/datasets/combined_sugarbeetsynthetic2026_phenobench_test_real.py',
     '../_base_/default_runtime.py',
 ]
 crop_size = (1024, 1024)

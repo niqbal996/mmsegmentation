@@ -116,7 +116,7 @@ class SyclopsDatasetCS(BaseSegDataset):
         palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0], [0, 0, 255]]
     )
 
-    def __init__(self, file_list='/netscratch/naeem/sugarbeet_syn_v6/merged_all.txt', 
+    def __init__(self, file_list='./mmseg_output/eccv_results/Deeplabv3Plus_r50_syn_ohem_loss_dilated_masks/merged_all.txt', 
                 subset_fraction=1.0, 
                 random_seed=None,
                 **kwargs):
@@ -241,7 +241,7 @@ class SyclopsDatasetDilatedWeedInstances(BaseSegDataset):
                  dilate_iterations=1,
                  dump_debug_samples=True,
                  debug_dump_max_samples=12,
-                 debug_dump_dir='/netscratch/naeem/mmseg_output/eccv_results/Deeplabv3Plus_r50_syn_ohem_loss_dilated_masks',
+                 debug_dump_dir='./mmseg_output/eccv_results/Deeplabv3Plus_r50_syn_ohem_loss_dilated_masks',
                  debug_overlay_alpha=0.5,
                  **kwargs):
         if cv2 is None:

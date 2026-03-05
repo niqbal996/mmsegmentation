@@ -1,8 +1,6 @@
 _base_ = [
     '../_base_/models/deeplabv3plus_r50-d8.py',
-    # '../_base_/datasets/syclops.py',
-    # '../_base_/datasets/syclops_dilated.py',
-    '../_base_/datasets/phenobench3.py',
+    '../_base_/datasets/sugarbeetsynthetic2026_and_phenobench.py',
     '../_base_/default_runtime.py',
 ]
 
@@ -15,8 +13,29 @@ model = dict(
     data_preprocessor=data_preprocessor,
     pretrained='open-mmlab://resnet50_v1c',
     backbone=dict(depth=50),
-    decode_head=dict(num_classes=num_classes),
-    auxiliary_head=dict(num_classes=num_classes))
+    decode_head=dict(
+        num_classes=num_classes,
+        loss_decode=dict(
+            type='FocalLoss',  
+            use_sigmoid=True,  
+            gamma=2.0,
+            alpha=0.25,
+            loss_weight=1.0,
+            class_weight=[1.0, 1.0, 5.0] 
+        )
+    ),
+    auxiliary_head=dict(
+        num_classes=num_classes,
+        loss_decode=dict(
+            type='FocalLoss',  
+            use_sigmoid=True,  
+            gamma=2.0,
+            alpha=0.25,
+            loss_weight=1.0,
+            class_weight=[1.0, 1.0, 5.0]
+        )
+    )
+)
 # optimizer
 optimizer = dict(
     type='AdamW', lr=0.0001, betas=(0.9, 0.999), weight_decay=0.0001)
