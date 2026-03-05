@@ -2,7 +2,8 @@
 For MMSeg installation, please follow the official mmseg installation [instructions](https://mmsegmentation.readthedocs.io/en/latest/get_started.html).  
 
 For dataset preparation and config paths, please refer to [datasets](DATASET.md).
-[PhenoBench](https://www.phenobench.org/) and [SugarbeetSynthetic2026](https://zenodo.org/records/18876921?preview=1&token=eyJhbGciOiJIUzUxMiIsImlhdCI6MTc3MjczNjQ2MiwiZXhwIjoxNzg4MTM0Mzk5fQ.eyJpZCI6ImRiZmExODk5LWQ1YjItNGM5MC04NGJjLTVhNTEyNWE4MGY3MSIsImRhdGEiOnt9LCJyYW5kb20iOiI5ZThmMjMxZTk0MTA2MGFmOTZkYzFlOThlNDllYmE3YiJ9.CSCLIzvRsoovY52YIYIPLrM_Cz2gkx5kIbz3gOBX0slqI4t3LqfHJQRORzBNMRsdqJX8CGzBHhDEecRlD7Akmw) can be downloaded from the given links. 
+
+[PhenoBench](https://www.phenobench.org/) and [SugarbeetSynthetic2026](https://bit.ly/40adJsL) can be downloaded from the given links. 
 # Training
 For any experiment, the relevant config needs to be provided to the `tools/train.py` script. 
 ```bash
