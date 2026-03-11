@@ -37,7 +37,7 @@ python3 tools/train.py --config-file configs/deeplabv3plus/deeplabv3plus_r50-d8_
 # Model checkpoints 
 
 For anonymity reasons, all the model checkpoint files are uploaded to the [Zenodo repository](https://zenodo.org/records/18961940?preview=1&token=eyJhbGciOiJIUzUxMiIsImlhdCI6MTc3MzI0MzM3OCwiZXhwIjoxNzg4MTM0Mzk5fQ.eyJpZCI6IjFiYWY4ZDc3LTY2ZmUtNGFjNy1hZDAwLWQ5ZGI5NmE5NTI1MiIsImRhdGEiOnt9LCJyYW5kb20iOiJhODYxNjZiNjNmM2E2YWRjNDEyYzZiODdiNTAxMjNhMyJ9.Swd1g8Q_NqQKD9HeL4BUqglU49365dBNPYaw8pA-IvTCXRkCWS_KpElj37vRXj-Uw-Ozxna04yC0pxwDrWtJJA). Once the anonymous phase is over, the weights will be added
-as hyperlink in the respective position in the above table. 
+as hyperlink in the respective position in the above table. The hyperlink might not work directly from the anonymous repository. Please copy the anonymous Zenodo link from the source code. 
 
 # TODO 
 
