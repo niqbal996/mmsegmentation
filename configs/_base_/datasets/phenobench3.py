@@ -1,6 +1,6 @@
 import os
 dataset_type = 'PhenobenchDatasetAL'
-data_root = '/path/to/phenobench/root/'
+data_root = '/netscratch/naeem/phenobench'
 
 # Define your dataset's classes and palette
 dataset_meta = dict(
@@ -29,8 +29,8 @@ test_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=8,
-    num_workers=4,
+    batch_size=4,
+    num_workers=2,
     persistent_workers=True,
     sampler=dict(type='InfiniteSampler', shuffle=True),
     dataset=dict(
@@ -44,8 +44,8 @@ train_dataloader = dict(
             seg_map_path='train/semantics'),
         pipeline=train_pipeline))
 val_dataloader = dict(
-    batch_size=6,
-    num_workers=4,
+    batch_size=2,
+    num_workers=1,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
@@ -70,18 +70,29 @@ test_dataloader = val_dataloader
 #         pipeline=test_pipeline))
 
 val_evaluator = [
-    dict(type='IoUMetric', iou_metrics=['mIoU']),
     dict(
-        type='InstanceDetectionMetric',
-        overlap_thr=0.01,
-        overlap_mode='gt',
-        crop_label=1,
-        weed_label=2,
-        instance_map_path='/path/to/phenobench/root/val/plant_instances',
-        instance_map_suffix='.png',
-        vis_output_dir='/path/to/mmseg_output/eccv_results/syn2real_0.01',
-        vis_area_bins=['100_200'],
-        vis_class='weed',
-        show_pred_for_detected_only=True)
+        type='IoUMetric',
+        iou_metrics=['mIoU'],
+        ignore_index=255,
+        ignore_label_ids=[]),
+    # dict(
+    #     type='InstanceDetectionMetric',
+    #     object_iog_thr=0.05,
+    #     object_iop_thr=0.05,
+    #     class0_label=0,
+    #     class1_label=1,
+    #     class2_label=2,
+    #     instance_map_path='/netscratch/naeem/phenobench/val/plant_instances',
+    #     instance_map_suffix='.png',
+    #     instance_map_subdirs=('plant_instances', 'instance_segmentation'),
+    #     # vis_output_dir='/netscratch/naeem/mmseg_output/eccv_results/eccv_table/examples',
+    #     # vis_fp_case_max=20,
+    #     # vis_bg_alpha=0.35,
+    #     pred_island_min_area=10,
+    #     class_names=('background/soil', 'crop', 'weed'),
+    #     ignore_index=255,
+    #     ignore_label_ids=[],
+    #     allow_semantic_instance_fallback=True,
+    #     resize_instance_to_gt=True)
 ]
 test_evaluator = val_evaluator

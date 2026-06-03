@@ -3,8 +3,8 @@ import os
 dataset_type_train = 'SyclopsDataset'
 dataset_type_val = 'PhenobenchDataset'
 
-data_root_train = '/path/to/sugarbeetsynthetic2026/root/'
-data_root_val = '/path/to/phenobench/root/'
+data_root_train = '/netscratch/naeem/sugarbeet_syn_v6/'
+data_root_val = '/netscratch/naeem/phenobench'
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('background', 'crop', 'weed'),
