@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/datasets/syclops_and_phenobench_al.py',
+    '../_base_/datasets/sugarbeetsynthetic2026_and_phenobench.py',
     '../_base_/default_runtime.py'
 ]
 

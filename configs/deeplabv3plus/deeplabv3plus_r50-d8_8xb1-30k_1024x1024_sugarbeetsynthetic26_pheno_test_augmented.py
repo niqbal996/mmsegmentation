@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/deeplabv3plus_r50-d8.py',
-    '../_base_/datasets/syclops.py',
+    '../_base_/datasets/sugarbeetsynthetic2026_and_phenobench.py',
     '../_base_/default_runtime.py',
 ]
 
@@ -16,21 +16,19 @@ model = dict(
     decode_head=dict(
         num_classes=num_classes,
         loss_decode=dict(
-            type='FocalLoss',  
-            use_sigmoid=True,  
-            gamma=2.0,
-            alpha=0.25,
+            type='OhemCrossEntropy',  
+            thres=0.7,
+            min_kept=100000,
             loss_weight=1.0,
-            class_weight=[1.0, 1.0, 5.0] 
+            class_weight=[1.0, 1.0, 5.0]
         )
     ),
     auxiliary_head=dict(
         num_classes=num_classes,
         loss_decode=dict(
-            type='FocalLoss',  
-            use_sigmoid=True,  
-            gamma=2.0,
-            alpha=0.25,
+            type='OhemCrossEntropy',  
+            thres=0.7,
+            min_kept=100000,
             loss_weight=1.0,
             class_weight=[1.0, 1.0, 5.0]
         )

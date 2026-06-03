@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/deeplabv3plus_r50-d8.py',
-    '../_base_/datasets/syclops_and_phenobench_augmented.py',
+    '../_base_/datasets/sugarbeetsynthetic2026_and_phenobench.py',
     '../_base_/default_runtime.py',
 ]
 
@@ -15,6 +15,7 @@ model = dict(
     backbone=dict(depth=50),
     decode_head=dict(
         num_classes=num_classes,
+        dilations=(1, 12, 24, 48), # from (1, 12, 24, 36)
         loss_decode=dict(
             type='FocalLoss',  
             use_sigmoid=True,  

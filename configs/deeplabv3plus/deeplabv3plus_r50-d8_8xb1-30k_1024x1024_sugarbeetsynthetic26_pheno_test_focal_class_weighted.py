@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/deeplabv3plus_r50-d8.py',
-    '../_base_/datasets/syclops_and_phenobench.py',
+    '../_base_/datasets/sugarbeetsynthetic2026.py',
     '../_base_/default_runtime.py',
 ]
 
@@ -21,8 +21,9 @@ model = dict(
             gamma=2.0,
             alpha=0.25,
             loss_weight=1.0,
-            )
-        ),
+            class_weight=[1.0, 1.0, 5.0] 
+        )
+    ),
     auxiliary_head=dict(
         num_classes=num_classes,
         loss_decode=dict(
@@ -31,6 +32,7 @@ model = dict(
             gamma=2.0,
             alpha=0.25,
             loss_weight=1.0,
+            class_weight=[1.0, 1.0, 5.0]
         )
     )
 )

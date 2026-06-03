@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/deeplabv3plus_r50-d8.py',
-    '../_base_/datasets/combined_syclops_phenobench_test_real.py',
+    '../_base_/datasets/combined_sugarbeetsynthetic2026_phenobench_test_real.py',
     '../_base_/default_runtime.py',
 ]
 

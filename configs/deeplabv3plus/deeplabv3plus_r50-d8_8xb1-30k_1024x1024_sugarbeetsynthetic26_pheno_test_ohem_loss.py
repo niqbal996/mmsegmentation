@@ -1,7 +1,7 @@
 _base_ = [
     '../_base_/models/deeplabv3plus_r50-d8.py',
-    # '../_base_/datasets/syclops_and_phenobench.py',
-    # '../_base_/datasets/syclops_dilated.py',
+    # '../_base_/datasets/sugarbeetsynthetic2026_and_phenobench.py',
+    # '../_base_/datasets/sugarbeetsynthetic2026_dilated.py',
     '../_base_/datasets/phenobench3.py',
     '../_base_/default_runtime.py',
 ]

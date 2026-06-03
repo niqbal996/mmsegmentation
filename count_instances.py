@@ -3,8 +3,8 @@ import glob
 import numpy as np
 from PIL import Image
 
-val_inst_dir = '/netscratch/naeem/phenobench/val/plant_instances'
-val_sem_dir = '/netscratch/naeem/phenobench/val/semantics'
+val_inst_dir = '/path/to/phenobench/root/val/plant_instances'
+val_sem_dir = '/path/to/phenobench/root/val/semantics'
 
 inst_files = sorted(glob.glob(os.path.join(val_inst_dir, '*.png')))
 
