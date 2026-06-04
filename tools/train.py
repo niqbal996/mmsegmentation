@@ -3,9 +3,6 @@ import argparse
 import logging
 import os
 import os.path as osp
-import re
-import warnings
-from glob import glob
 
 from mmengine.config import Config, DictAction
 from mmengine.logging import print_log
@@ -14,28 +11,6 @@ from mmseg.utils import register_all_modules
 register_all_modules()
 
 from mmseg.registry import RUNNERS
-
-
-ITER_PATTERN = re.compile(r'_iter_(\d+)\.pth$')
-
-
-def parse_iter_from_ckpt(path):
-    match = ITER_PATTERN.search(osp.basename(path))
-    if not match:
-        return -1
-    return int(match.group(1))
-
-
-def find_best_checkpoint(work_dir):
-    primary = glob(osp.join(work_dir, 'best_mIoU_iter_*.pth'))
-    fallback = glob(osp.join(work_dir, 'best_*_iter_*.pth'))
-    candidates = primary if primary else fallback
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda p: (parse_iter_from_ckpt(p), p), reverse=True)
-    return candidates[0]
 
 
 def parse_args():
@@ -67,14 +42,6 @@ def parse_args():
         action='store_true',
         help='evaluate the checkpoint after training')
     parser.add_argument(
-        '--log-level',
-        choices=['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'],
-        help='override config log level')
-    parser.add_argument(
-        '--quiet',
-        action='store_true',
-        help='suppress most mmengine logs and Python warnings')
-    parser.add_argument(
         '--launcher',
         choices=['none', 'pytorch', 'slurm', 'mpi'],
         default='none',
@@ -99,11 +66,8 @@ def main():
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
 
-    if args.quiet:
-        warnings.filterwarnings('ignore')
-        cfg.log_level = 'ERROR'
-    elif args.log_level is not None:
-        cfg.log_level = args.log_level
+    # Keep MMEngine output minimal: only ERROR logs.
+    # cfg.log_level = 'ERROR'
 
     # work_dir is determined in this priority: CLI > segment in file > filename
     if args.work_dir is not None:
@@ -146,10 +110,14 @@ def main():
 
     # test the best checkpoint after training
     if args.eval_after_training:
-        # Match generate_metrics.py behavior: prefer mIoU checkpoint and
-        # fallback to any best_* checkpoint saved by CheckpointHook.
-        best_ckpt_path = find_best_checkpoint(runner.work_dir)
-
+        # The runner has a `work_dir` attribute that stores the path of the
+        # current work directory.
+        best_ckpt_path = None
+        for filename in os.listdir(runner.work_dir):
+            if filename.startswith('best_mIoU_iter_') and filename.endswith('.pth'):
+                best_ckpt_path = osp.join(runner.work_dir, filename)
+                break
+        
         if best_ckpt_path and osp.exists(best_ckpt_path):
             runner.load_checkpoint(best_ckpt_path)
             runner.test()

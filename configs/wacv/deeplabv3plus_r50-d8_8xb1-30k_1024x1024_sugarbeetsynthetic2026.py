@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/deeplabv3plus_r50-d8.py',
-    '../_base_/datasets/syclops.py',
+    'datasets/sugarbeetsynthetic2026.py',
     '../_base_/default_runtime.py',
 ]
 
@@ -57,4 +57,10 @@ default_hooks = dict(
     visualization=dict(type='SegVisualizationHook')
 )
 
+# train_dataloader = dict(batch_size=2)
+
+# Default setting for scaling LR automatically
+#   - `enable` means enable scaling LR automatically
+#       or not by default.
+#   - `base_batch_size` = (4 GPUs) x (2 samples per GPU).
 # auto_scale_lr = dict(enable=False, base_batch_size=8)

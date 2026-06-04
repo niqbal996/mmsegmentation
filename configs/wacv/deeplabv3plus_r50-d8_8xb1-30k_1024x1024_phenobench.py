@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/deeplabv3plus_r50-d8.py',
-    '../_base_/datasets/phenobench3.py',
+    'datasets/phenobench3.py',
     '../_base_/default_runtime.py',
 ]
 

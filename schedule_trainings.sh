@@ -16,23 +16,22 @@ OUTPUT_ROOT="/netscratch/naeem/mmseg_output/wacv_results"
 declare -a CONFIG_FILES=(
     # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench.py"
     # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench_ohem_loss.py"
-    # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_syclops"
-    # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_syclops_ohem_loss.py"
-    "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_syclops_and_phenobench.py"
+    # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026.py"
+    # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026_ohem_loss.py"
+    "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
     # "fcn_hr18_1xb4-30k_1024x1024_phenobench"
     # "fcn_hr18_1xb4-30k_1024x1024_phenobench_ohem_loss.py"
-    # "fcn_hr18_1xb4-30k_1024x1024_syclops.py"
-    # "fcn_hr18_1xb4-30k_1024x1024_syclops_and_phenobench.py"
-    "segformer_mit-b0_1xb2-30k_1024x1024_phenobench_baseline.py"
+    # "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026.py"
+    # "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
     "segformer_mit-b2_1xb2-30k_1024x1024_phenobench_vanilla.py"
     "segformer_mit-b2_1xb2-30k_1024x1024_phenobench_ohem_loss.py"
-    "segformer_mit-b2_1xb2-30k_1024x1024_syclops_vanilla.py"
+    "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_vanilla.py"
     # "mask2former_r50_1024x1024_phenobench.py"
-    # "mask2former_r50_1024x1024_syclops.py"
-    # "mask2former_r50_1024x1024_syclops_and_phenobench.py"
+    # "mask2former_r50_1024x1024_sugarbeetsynthetic2026.py"
+    # "mask2former_r50_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
     # "mask2former_swin-t_1024x1024_phenobench.py"
-    "mask2former_swin-t_1024x1024_syclops.py"
-    "mask2former_swin-t_1024x1024_syclops_and_phenobench.py"
+    "mask2former_swin-t_1024x1024_sugarbeetsynthetic2026.py"
+    "mask2former_swin-t_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
 )
 
 MODE="submit"
@@ -56,8 +55,22 @@ model_display_name() {
     esac
 }
 
+normalize_config_name() {
+    local config_file="$1"
+
+    # Backward-compatible aliasing: transparently map legacy syclops names
+    # to the canonical sugarbeetsynthetic2026 naming.
+    config_file="${config_file//_syclops_and_phenobench/_sugarbeetsynthetic2026_and_phenobench}"
+    config_file="${config_file//_syclops_ohem_loss/_sugarbeetsynthetic2026_ohem_loss}"
+    config_file="${config_file//_syclops/_sugarbeetsynthetic2026}"
+
+    echo "$config_file"
+}
+
 resolve_config_path() {
     local config_file="$1"
+    config_file="$(normalize_config_name "$config_file")"
+
     if [[ "$config_file" != *.py ]]; then
         config_file="${config_file}.py"
     fi
@@ -71,6 +84,8 @@ resolve_config_path() {
 
 build_work_dir_name() {
     local config_file="$1"
+    config_file="$(normalize_config_name "$config_file")"
+
     local filename="${config_file##*/}"
     local stem="${filename%.py}"
 
@@ -105,17 +120,18 @@ build_work_dir_name() {
     done
 
     # Dataset token conventions used in this project:
-    # - syclops
+    # - syclops / sugarbeetsynthetic2026
     # - phenobench / phenobench3
-    # - syclops_and_phenobench (rendered as syclops2phenobench)
+    # - syclops_and_phenobench or sugarbeetsynthetic2026_and_phenobench
+    #   (rendered as sugarbeetsynthetic2026_2phenobench)
     local idx=0
     if [[ ${#metadata_tokens[@]} -gt 0 ]]; then
-        if [[ "${metadata_tokens[0]}" == "syclops" ]]; then
+        if [[ "${metadata_tokens[0]}" == "syclops" || "${metadata_tokens[0]}" == "sugarbeetsynthetic2026" ]]; then
             if [[ ${#metadata_tokens[@]} -ge 3 && "${metadata_tokens[1]}" == "and" && "${metadata_tokens[2]}" == "phenobench" ]]; then
-                dataset="syclops2phenobench"
+                dataset="sugarbeetsynthetic2026_2phenobench"
                 idx=3
             else
-                dataset="syclops"
+                dataset="sugarbeetsynthetic2026"
                 idx=1
             fi
         elif [[ "${metadata_tokens[0]}" == "phenobench" || "${metadata_tokens[0]}" == "phenobench3" ]]; then

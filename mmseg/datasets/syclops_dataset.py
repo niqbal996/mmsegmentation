@@ -380,3 +380,19 @@ class SyclopsDatasetDilatedWeedInstances(BaseSegDataset):
         data = self.data_list[idx]
         return self.load_annotations(
             data['img_path'], data['seg_map_path'], data['instance_map_path'])
+
+
+@DATASETS.register_module()
+class SugarBeetSynthetic2026Dataset(SyclopsDataset):
+    """Canonical alias for the synthetic sugar beet 2026 dataset."""
+
+
+@DATASETS.register_module()
+class SugarBeetSynthetic2026DatasetCS(SyclopsDatasetCS):
+    """Canonical alias for the class-balanced synthetic sugar beet dataset."""
+
+
+@DATASETS.register_module()
+class SugarBeetSynthetic2026DatasetDilatedWeedInstances(
+        SyclopsDatasetDilatedWeedInstances):
+    """Canonical alias for synthetic sugar beet dataset with dilated weeds."""

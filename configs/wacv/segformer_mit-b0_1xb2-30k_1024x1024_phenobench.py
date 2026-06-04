@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/segformer_mit-b0.py',
-    '../_base_/datasets/phenobench3.py',
+    'datasets/phenobench3.py',
     '../_base_/default_runtime.py',
 ]
 crop_size = (1024, 1024)

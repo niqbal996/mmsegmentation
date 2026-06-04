@@ -1,5 +1,5 @@
 _base_ = ['../_base_/default_runtime.py', 
-          '../_base_/datasets/phenobench3.py',
+          'datasets/phenobench3.py',
         ]
 
 custom_imports = dict(imports='mmdet.models', allow_failed_imports=False)
