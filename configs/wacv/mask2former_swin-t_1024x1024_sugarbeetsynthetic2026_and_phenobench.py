@@ -52,3 +52,17 @@ custom_keys.update({
 # optimizer
 optim_wrapper = dict(
     paramwise_cfg=dict(custom_keys=custom_keys, norm_decay_mult=0.0))
+
+default_hooks = dict(
+    timer=dict(type='IterTimerHook'),
+    logger=dict(type='LoggerHook', interval=50, log_metric_by_epoch=False),
+    param_scheduler=dict(type='ParamSchedulerHook'),
+    checkpoint=dict(
+        type='CheckpointHook', by_epoch=False, interval=interval,
+        max_keep_ckpts=1,
+        # Track best checkpoint by class-wise IoU for weeds.
+        save_best='IoU_weed',
+        rule='greater'),
+    sampler_seed=dict(type='DistSamplerSeedHook'),
+    visualization=dict(type='SegVisualizationHook')
+)

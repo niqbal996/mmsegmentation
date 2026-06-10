@@ -9,9 +9,11 @@ subfolder, and saves a consolidated summary json across all experiments.
 import argparse
 import datetime as dt
 import json
+import logging
 import os
 import os.path as osp
 import re
+import subprocess
 import time
 from glob import glob
 from numbers import Number
@@ -29,6 +31,7 @@ SCHEDULE_ENTRY_PATTERN = re.compile(
 TIMESTAMP_DIR_PATTERN = re.compile(r'^\d{8}_\d{6}$')
 METRICS_FILE_PATTERN = re.compile(r'^(?P<idx>\d+)_metrics\.json$')
 ITER_PATTERN = re.compile(r'_iter_(\d+)\.pth$')
+NUMBER_PATTERN = re.compile(r'^[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?$')
 
 
 def parse_args() -> argparse.Namespace:
@@ -107,6 +110,38 @@ def parse_schedule_file(schedule_file: str) -> List[Tuple[str, str]]:
             config_path = normalize_path(config_raw, base_dir)
             work_dir = normalize_path(workdir_raw, base_dir)
             entries.append((config_path, work_dir))
+
+    # New scheduler format builds entries dynamically from CONFIG_FILES.
+    # If no legacy "config;work_dir" entries were found, ask the scheduler to
+    # print resolved pairs and parse those.
+    if entries:
+        return entries
+
+    try:
+        proc = subprocess.run(
+            ['bash', schedule_file, '--print-trainings'],
+            cwd=base_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False)
+    except OSError:
+        return entries
+
+    if proc.returncode != 0:
+        return entries
+
+    for raw_line in proc.stdout.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('Printed '):
+            continue
+        if ';' not in line:
+            continue
+
+        config_raw, workdir_raw = line.split(';', 1)
+        config_path = normalize_path(config_raw.strip(), base_dir)
+        work_dir = normalize_path(workdir_raw.strip(), base_dir)
+        entries.append((config_path, work_dir))
 
     return entries
 
@@ -264,6 +299,101 @@ def extract_metrics_from_latest_dir(test_dir: Optional[str]) -> Dict[str, float]
     return best_metrics
 
 
+def _to_float(text: str) -> Optional[float]:
+    text = text.strip()
+    if not text:
+        return None
+    if not NUMBER_PATTERN.match(text):
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def extract_classwise_metrics_from_log(test_dir: Optional[str]) -> Dict[str, float]:
+    """Parse class-wise metrics table from mmseg test logs.
+
+    Expected table section in logs:
+      per class results:
+      +------+-----+-----+
+      | Class| IoU | Acc |
+      | weed | 68.9| 89.3|
+    """
+    if test_dir is None or not osp.isdir(test_dir):
+        return {}
+
+    log_files = sorted(glob(osp.join(test_dir, '*.log')), key=osp.getmtime)
+    if not log_files:
+        return {}
+
+    log_path = log_files[-1]
+    try:
+        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+    except OSError:
+        return {}
+
+    last_marker = -1
+    for idx, line in enumerate(lines):
+        if 'per class results:' in line:
+            last_marker = idx
+
+    if last_marker < 0:
+        return {}
+
+    table_lines: List[str] = []
+    for line in lines[last_marker + 1:]:
+        if '+' in line or '|' in line:
+            table_lines.append(line.strip())
+            continue
+        if table_lines:
+            break
+
+    rows: List[List[str]] = []
+    for line in table_lines:
+        if not line.startswith('|'):
+            continue
+        parts = [p.strip() for p in line.strip().strip('|').split('|')]
+        if parts:
+            rows.append(parts)
+
+    if len(rows) < 2:
+        return {}
+
+    header = rows[0]
+    try:
+        class_idx = header.index('Class')
+    except ValueError:
+        return {}
+
+    metric_cols: List[Tuple[int, str]] = []
+    for i, col_name in enumerate(header):
+        if i == class_idx:
+            continue
+        if not col_name:
+            continue
+        metric_cols.append((i, col_name))
+
+    classwise: Dict[str, float] = {}
+    for row in rows[1:]:
+        if class_idx >= len(row):
+            continue
+        class_name = row[class_idx].replace(' ', '_')
+        if not class_name:
+            continue
+
+        for col_idx, metric_name in metric_cols:
+            if col_idx >= len(row):
+                continue
+            value = _to_float(row[col_idx])
+            if value is None:
+                continue
+            classwise[f'{metric_name}_{class_name}'] = value
+
+    return classwise
+
+
 def next_metrics_index(metrics_dir: str) -> int:
     if not osp.isdir(metrics_dir):
         return 1
@@ -285,7 +415,7 @@ def write_json(path: str, payload: Dict[str, Any]) -> None:
 
 
 def ordered_metric_keys(results: Sequence[Dict[str, Any]]) -> List[str]:
-    preferred = ['mIoU', 'mAcc', 'aAcc', 'time']
+    preferred = ['mIoU', 'mAcc', 'aAcc', 'IoU_weed', 'Acc_weed', 'time']
     all_keys = set()
 
     for result in results:
@@ -375,6 +505,7 @@ def run_single_experiment(config_path: str, work_dir: str,
     result['best_checkpoint'] = best_ckpt
 
     cfg = Config.fromfile(config_path)
+    # cfg.log_level = 'ERROR'
     cfg.launcher = args.launcher
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
@@ -409,6 +540,10 @@ def run_single_experiment(config_path: str, work_dir: str,
     metrics = normalize_metrics_dict(metrics_obj)
     if not metrics:
         metrics = extract_metrics_from_latest_dir(test_dir)
+
+    classwise_metrics = extract_classwise_metrics_from_log(test_dir)
+    for key, value in classwise_metrics.items():
+        metrics.setdefault(key, value)
 
     metrics['time'] = elapsed
 
@@ -487,7 +622,7 @@ def main() -> None:
             print_log(
                 f"Failed {exp_name}: {result.get('error', 'Unknown error')}",
                 logger='current',
-                level='WARNING')
+                level=logging.WARNING)
             if args.strict:
                 raise RuntimeError(result.get('error', 'Experiment failed'))
 

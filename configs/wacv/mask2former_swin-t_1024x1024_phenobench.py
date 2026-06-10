@@ -40,6 +40,19 @@ custom_keys = {
     'query_feat': embed_multi,
     'level_embed': embed_multi
 }
+default_hooks = dict(
+    timer=dict(type='IterTimerHook'),
+    logger=dict(type='LoggerHook', interval=50, log_metric_by_epoch=False),
+    param_scheduler=dict(type='ParamSchedulerHook'),
+    checkpoint=dict(
+        type='CheckpointHook', by_epoch=False, interval=interval,
+        max_keep_ckpts=1,
+        # Track best checkpoint by class-wise IoU for weeds.
+        save_best='IoU_weed',
+        rule='greater'),
+    sampler_seed=dict(type='DistSamplerSeedHook'),
+    visualization=dict(type='SegVisualizationHook')
+)
 custom_keys.update({
     f'backbone.stages.{stage_id}.blocks.{block_id}.norm': backbone_norm_multi
     for stage_id, num_blocks in enumerate(depths)
