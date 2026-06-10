@@ -1,6 +1,7 @@
 import os
 dataset_type = 'PhenobenchDatasetAL'
-data_root = '/path/to/phenobench/root/'
+# data_root = '/mnt/e/datasets/phenobench'
+data_root = '/netscratch/naeem/phenobench'
 
 # Define your dataset's classes and palette
 dataset_meta = dict(
@@ -71,17 +72,17 @@ test_dataloader = val_dataloader
 
 val_evaluator = [
     dict(type='IoUMetric', iou_metrics=['mIoU']),
-    dict(
-        type='InstanceDetectionMetric',
-        overlap_thr=0.01,
-        overlap_mode='gt',
-        crop_label=1,
-        weed_label=2,
-        instance_map_path='/path/to/phenobench/root/val/plant_instances',
-        instance_map_suffix='.png',
-        vis_output_dir='/path/to/mmseg_output/eccv_results/syn2real_0.01',
-        vis_area_bins=['100_200'],
-        vis_class='weed',
-        show_pred_for_detected_only=True)
+    # dict(
+    #     type='InstanceDetectionMetric',
+    #     overlap_thr=0.01,
+    #     overlap_mode='gt',
+    #     crop_label=1,
+    #     weed_label=2,
+    #     instance_map_path='/path/to/phenobench/root/val/plant_instances',
+    #     instance_map_suffix='.png',
+    #     vis_output_dir='/path/to/mmseg_output/eccv_results/syn2real_0.01',
+    #     vis_area_bins=['100_200'],
+    #     vis_class='weed',
+    #     show_pred_for_detected_only=True)
 ]
 test_evaluator = val_evaluator
