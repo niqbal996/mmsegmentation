@@ -1,331 +1,771 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 import os.path as osp
-from collections import OrderedDict
-from datetime import datetime
-import json
+from collections import OrderedDict, defaultdict
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-from PIL import Image, ImageDraw
+import torch
+import torch.nn.functional as F
 from mmengine.evaluator import BaseMetric
 from mmengine.logging import MMLogger, print_log
 from mmengine.utils import mkdir_or_exist
+from PIL import Image, ImageDraw
 from prettytable import PrettyTable
+from scipy import ndimage as sp_ndimage
 
 from mmseg.registry import METRICS
 
 
 @METRICS.register_module()
 class InstanceDetectionMetric(BaseMetric):
-    """Instance-level detection metric for semantic predictions.
+    """Instance-driven crop/weed metric with object and pixel sub-metrics.
 
-    A GT instance is counted as detected when semantic prediction overlaps with
-    that GT instance by at least ``overlap_thr``.
+    Sub-metrics:
+                1) Object-level metrics per class (crop/weed):
+           - Predicted weed connected-components are extracted from prediction.
+           - If multiple predicted blobs overlap the same GT weed instance,
+             they are merged as one virtual prediction for that GT instance.
+                     - Object recall uses IoG:
+                         IoG = Area(virtual_pred ∩ GT_instance) / Area(GT_instance).
+                     - GT instance is recalled if IoG >= ``object_iog_thr``.
+                     - Object precision uses IoP on each predicted component:
+                         IoP = Area(pred_component ∩ GT_class_pixels) /
+                                     Area(pred_component).
+                     - Predicted component is precision-TP if IoP >= ``object_iop_thr``.
+                     - Predicted component is precision-FP otherwise.
 
-    Notes:
-        - This metric is intended for synthetic datasets that provide
-          instance maps (e.g. Syclops).
-        - GT instance ids can be large int64 values.
+          2) Pixel-level mIoU over a fixed 3x3 confusion matrix:
+              classes are [class0, class1, class2] by configured label ids.
+           Per-class IoU/Precision/Recall/F1 are reported, along with means.
 
     Args:
-        overlap_thr (float): Detection threshold in [0, 1].
-        overlap_mode (str): Overlap type. Options:
-            - ``'gt'``: intersection / GT instance area
-            - ``'iou'``: intersection / union
-            Default: ``'gt'``.
-        crop_label (int): Semantic class id for crop. Default: 1.
-        weed_label (int): Semantic class id for weed. Default: 2.
-        area_bins (Sequence[Tuple[int, Optional[int]]]): Instance-area bins in
-            pixels. Right edge is exclusive. ``None`` means open ended.
-        instance_map_path (str, optional): Optional root directory to resolve
-            instance maps when ``instance_map_path`` is not present in sample
-            metainfo.
-        instance_map_suffix (str): Suffix for instance maps. Default: '.npz'.
-        instance_map_subdirs (Sequence[str]): Candidate subdir names used when
-            inferring instance map path from semantic mask path. Earlier
-            entries have higher priority.
+        object_iog_thr (float, optional): IoG threshold for object recall.
+            If None, falls back to ``object_ioa_thr`` for backward
+            compatibility, then 0.10.
+        object_iop_thr (float, optional): IoP threshold for object precision.
+            If None, uses ``object_iog_thr``.
+        object_ioa_thr (float, optional): Deprecated alias for
+            ``object_iog_thr``.
+        class0_label (int): Label id for class slot 0. Default: 0.
+        class1_label (int): Label id for class slot 1. Default: 1.
+        class2_label (int): Label id for class slot 2. Default: 2.
+        class_names (Sequence[str]): Names for [class0, class1, class2].
+            Example: ('background/soil', 'crop', 'weed').
+        ignore_index (int): Ignore index in GT semantic mask. Default: 255.
+        ignore_label_ids (Sequence[int], optional): Additional GT labels to
+            ignore for pixel confusion and overlap checks.
+        instance_map_path (str, optional): Optional root directory for
+            instance maps when sample metainfo does not include a direct path.
+        instance_map_suffix (str): Suffix for inferred instance map filename.
+            Default: '.npz'.
+        instance_map_subdirs (Sequence[str]): Candidate subdir names when
+            inferring from semantic map path.
+        allow_semantic_instance_fallback (bool): If instance map is missing,
+            create pseudo instance map from GT weed connected-components.
+            Default: True.
+        resize_instance_to_gt (bool): Resize instance map to GT shape with
+            nearest-neighbor when shape mismatch occurs. Default: True.
+        vis_output_dir (str, optional): Output directory for FP-focused
+            visualization images. If None, visualization is disabled.
+        vis_fp_case_max (int): Maximum number of FP-focused visualization
+            images to save. Default: 10.
+        vis_bg_alpha (float): Background alpha for visualization panels.
+            Default: 0.35.
+        pred_island_min_area (int): Minimum predicted connected-component area
+            (in pixels) kept for object-level TP/FP accounting. Components
+            smaller than this threshold are ignored entirely. Set to 0 to
+            disable filtering. Default: 0.
         collect_device (str): 'cpu' or 'gpu'. Default: 'cpu'.
         prefix (str, optional): Metric name prefix.
     """
 
-    default_area_bins = (
-        (0, 40),
-        (40, 80),
-        (80, 100),
-        (100, 200),
-        (200, 500),
-        (500, 1000),
-        (1000, None),
-    )
-
     def __init__(self,
-                 overlap_thr: float = 0.5,
-                 overlap_mode: str = 'gt',
-                 crop_label: int = 1,
-                 weed_label: int = 2,
-                 area_bins: Optional[Sequence[Tuple[int, Optional[int]]]] = None,
+                 object_iog_thr: Optional[float] = None,
+                 object_iop_thr: Optional[float] = None,
+                 object_ioa_thr: Optional[float] = None,
+                 class0_label: int = 0,
+                 class1_label: int = 1,
+                 class2_label: int = 2,
+                 class_names: Sequence[str] = ('background/soil', 'crop', 'weed'),
+                 ignore_index: int = 255,
+                 ignore_label_ids: Optional[Sequence[int]] = None,
                  instance_map_path: Optional[str] = None,
-                 instance_map_suffix: Optional[str] = None,
-                 auto_instance_suffixes: Sequence[str] = ('.npz', '.png', '.npy'),
+                 instance_map_suffix: str = '.npz',
                  instance_map_subdirs: Sequence[str] = ('plant_instances',
                                                        'instance_segmentation'),
+                 allow_semantic_instance_fallback: bool = True,
                  resize_instance_to_gt: bool = True,
                  vis_output_dir: Optional[str] = None,
-                 vis_area_bins: Optional[Sequence[str]] = None,
-                 vis_class: str = 'weed',
-                 show_pred_for_detected_only: bool = True,
-                 vis_gt_alpha: float = 0.45,
-                 vis_pred_alpha: float = 0.35,
-                 vis_per_eval_subdir: bool = True,
+                 vis_fp_case_max: int = 10,
+                 vis_bg_alpha: float = 0.35,
+                 pred_island_min_area: int = 0,
                  collect_device: str = 'cpu',
                  prefix: Optional[str] = None,
                  **kwargs) -> None:
         super().__init__(collect_device=collect_device, prefix=prefix)
 
-        self.overlap_thr = float(overlap_thr)
-        if not (0.0 <= self.overlap_thr <= 1.0):
-            raise ValueError(f'overlap_thr must be in [0, 1], got {overlap_thr}.')
+        if object_iog_thr is None:
+            if object_ioa_thr is not None:
+                object_iog_thr = object_ioa_thr
+            else:
+                object_iog_thr = 0.10
+        if object_iop_thr is None:
+            object_iop_thr = object_iog_thr
 
-        if overlap_mode not in {'gt', 'iou'}:
+        self.object_iog_thr = float(object_iog_thr)
+        self.object_iop_thr = float(object_iop_thr)
+        # Keep deprecated alias for backward compatibility in internal code.
+        self.object_ioa_thr = self.object_iog_thr
+
+        if not (0.0 <= self.object_iog_thr <= 1.0):
             raise ValueError(
-                f"overlap_mode must be one of ['gt', 'iou'], got {overlap_mode}.")
-        self.overlap_mode = overlap_mode
+                f'object_iog_thr must be in [0, 1], got {object_iog_thr}.')
+        if not (0.0 <= self.object_iop_thr <= 1.0):
+            raise ValueError(
+                f'object_iop_thr must be in [0, 1], got {object_iop_thr}.')
 
-        self.crop_label = int(crop_label)
-        self.weed_label = int(weed_label)
+        # Backward-compatible aliases from older config names.
+        if 'background_label' in kwargs:
+            class0_label = kwargs.pop('background_label')
+        if 'soil_label' in kwargs:
+            class1_label = kwargs.pop('soil_label')
+        if 'crop_label' in kwargs:
+            class1_label = kwargs.pop('crop_label')
+        if 'weed_label' in kwargs:
+            class2_label = kwargs.pop('weed_label')
+
+        self.class0_label = int(class0_label)
+        self.class1_label = int(class1_label)
+        self.class2_label = int(class2_label)
+        self.weed_label = self.class2_label
+
+        if len(class_names) != 3:
+            raise ValueError('class_names must contain exactly 3 entries.')
+        self.class_names = tuple(str(x) for x in class_names)
+        self.eval_label_ids = (
+            self.class0_label,
+            self.class1_label,
+            self.class2_label,
+        )
+        if len(set(self.eval_label_ids)) != 3:
+            raise ValueError(
+                'class0_label, class1_label and class2_label must be unique '
+                f'for a valid 3x3 confusion matrix, got {self.eval_label_ids}.')
+
+        self.ignore_index = int(ignore_index)
+        self.ignore_label_ids = set(int(x) for x in (ignore_label_ids or []))
+
+        # Object-level evaluation is reported for crop (class1) and weed (class2).
+        self.object_eval_class_labels = (self.class1_label, self.class2_label)
+
         self.instance_map_path = instance_map_path
-        self.instance_map_suffix = instance_map_suffix
-        self.auto_instance_suffixes = tuple(auto_instance_suffixes)
+        self.instance_map_suffix = str(instance_map_suffix)
         self.instance_map_subdirs = tuple(instance_map_subdirs)
+        self.allow_semantic_instance_fallback = bool(allow_semantic_instance_fallback)
         self.resize_instance_to_gt = bool(resize_instance_to_gt)
-        self.area_bins = tuple(area_bins) if area_bins is not None else self.default_area_bins
-        self.vis_output_dir = vis_output_dir
-        self.vis_area_bins = set(vis_area_bins) if vis_area_bins is not None else None
-        if vis_class not in {'crop', 'weed', 'all'}:
-            raise ValueError(f"vis_class must be one of ['crop', 'weed', 'all'], got {vis_class}.")
-        self.vis_class = vis_class
-        self.show_pred_for_detected_only = bool(show_pred_for_detected_only)
-        self.vis_gt_alpha = float(max(0.0, min(1.0, vis_gt_alpha)))
-        self.vis_pred_alpha = float(max(0.0, min(1.0, vis_pred_alpha)))
-        self.vis_per_eval_subdir = bool(vis_per_eval_subdir)
-        self._vis_sample_index = 0
-        self._vis_initialized = False
-        self._vis_eval_output_dir = None
-        self._vis_count_by_key = OrderedDict()
-        self._vis_manifest = []
 
+        self.vis_output_dir = vis_output_dir
+        self.vis_fp_case_max = int(max(0, vis_fp_case_max))
+        self.vis_bg_alpha = float(max(0.0, min(1.0, vis_bg_alpha)))
+        self.pred_island_min_area = int(max(0, pred_island_min_area))
+        self._vis_fp_candidates: List[dict] = []
+        self._vis_case_seq = 0
         if self.vis_output_dir is not None:
             mkdir_or_exist(self.vis_output_dir)
 
-        self._label_to_name = {
-            self.crop_label: 'crop',
-            self.weed_label: 'weed',
-        }
-
     def process(self, data_batch: dict, data_samples: Sequence[dict]) -> None:
-        """Process one batch of data and data_samples."""
-        if self.vis_output_dir is not None and not self._vis_initialized:
-            self._prepare_vis_output_dir()
-            self._vis_initialized = True
+        """Process one batch and append compact per-sample summaries."""
+        logger: MMLogger = MMLogger.get_current_instance()
 
         for data_sample in data_samples:
-            pred_label = data_sample['pred_sem_seg']['data'].squeeze().cpu().numpy()
-            gt_label = data_sample['gt_sem_seg']['data'].squeeze().cpu().numpy()
+            pred_label = data_sample['pred_sem_seg']['data'].squeeze()
+            gt_label = data_sample['gt_sem_seg']['data'].squeeze().to(pred_label)
+
+            if pred_label.shape != gt_label.shape:
+                print_log(
+                    'InstanceDetectionMetric: shape mismatch detected, resizing '
+                    f'prediction from {tuple(pred_label.shape)} to '
+                    f'{tuple(gt_label.shape)} with nearest interpolation.',
+                    logger=logger)
+                pred_label = F.interpolate(
+                    pred_label[None, None].float(),
+                    size=gt_label.shape,
+                    mode='nearest')[0, 0].to(gt_label.dtype)
+
+            pred_np = pred_label.cpu().numpy().astype(np.int64)
+            gt_np = gt_label.cpu().numpy().astype(np.int64)
 
             instance_map_file = self._resolve_instance_map_path(data_sample)
-            instance_map = self._load_instance_map(instance_map_file)
+            try:
+                instance_map = self._load_instance_map(instance_map_file)
+            except FileNotFoundError:
+                if not self.allow_semantic_instance_fallback:
+                    raise
+                print_log(
+                    'InstanceDetectionMetric: instance map missing, falling '
+                    'back to connected components from GT weed semantic mask: '
+                    f'{instance_map_file}',
+                    logger=logger)
+                instance_map = self._semantic_to_instance_map(gt_np)
 
-            if instance_map.shape != gt_label.shape:
+            if instance_map.shape != gt_np.shape:
                 if not self.resize_instance_to_gt:
                     raise ValueError(
                         f'Shape mismatch for {instance_map_file}: '
-                        f'instance_map={instance_map.shape}, gt={gt_label.shape}')
+                        f'instance_map={instance_map.shape}, gt={gt_np.shape}')
                 instance_map = self._resize_instance_map_nearest(
-                    instance_map, target_shape=gt_label.shape)
+                    instance_map, target_shape=gt_np.shape)
 
-            instance_records = self._evaluate_single_records(pred_label, gt_label, instance_map)
-            sample_stats = [
+            object_stats = self._compute_object_level_stats(
+                pred_label=pred_np,
+                gt_label=gt_np,
+                instance_map=instance_map)
+            pixel_confusion = self._compute_pixel_confusion_matrix(
+                pred_label=pred_np,
+                gt_label=gt_np)
+
+            if self.vis_output_dir is not None and self.vis_fp_case_max > 0:
+                self._collect_vis_fp_candidate(
+                    data_sample=data_sample,
+                    pred_label=pred_np,
+                    gt_label=gt_np,
+                    instance_map=instance_map)
+
+            self.results.append(
                 dict(
-                    class_name=record['class_name'],
-                    area=record['area'],
-                    detected=record['detected'])
-                for record in instance_records
-            ]
-            # Wrap the list of instances for this image in a single dict
-            # so that mmengine's collect_results counts it as 1 sample.
-            self.results.append({'instances': sample_stats})
-
-            if self.vis_output_dir is not None:
-                img_path = self._resolve_img_path(data_sample)
-                if img_path is not None and osp.exists(img_path):
-                    rgb_image = self._load_rgb_image(img_path)
-                    if rgb_image.shape[:2] != gt_label.shape:
-                        rgb_image = self._resize_rgb_nearest(rgb_image, gt_label.shape)
-                    self._dump_visualizations(
-                        img_path=img_path,
-                        rgb_image=rgb_image,
-                        pred_label=pred_label,
-                        instance_records=instance_records)
-        # print('hold')
+                    object_stats=object_stats,
+                    pixel_confusion=pixel_confusion,
+                ))
 
     def compute_metrics(self, results: list) -> Dict[str, float]:
-        """Compute metrics from processed results."""
+        """Aggregate sample summaries and return final metrics."""
         logger: MMLogger = MMLogger.get_current_instance()
 
         if len(results) == 0:
-            logger.warning('No instances found for InstanceDetectionMetric.')
+            logger.warning('No samples available for InstanceDetectionMetric.')
             return OrderedDict()
 
-        class_totals = {'crop': 0, 'weed': 0}
-        class_detected = {'crop': 0, 'weed': 0}
-        bin_totals = OrderedDict((self._bin_name(b), 0) for b in self.area_bins)
-        bin_detected = OrderedDict((self._bin_name(b), 0) for b in self.area_bins)
-        cls_bin_totals = {
-            'crop': OrderedDict((self._bin_name(b), 0) for b in self.area_bins),
-            'weed': OrderedDict((self._bin_name(b), 0) for b in self.area_bins),
+        object_totals = self._init_object_totals()
+        removed_totals = {
+            class_label: {'all': 0.0, 'le100': 0.0, 'gt100': 0.0}
+            for class_label in self.object_eval_class_labels
         }
-        cls_bin_detected = {
-            'crop': OrderedDict((self._bin_name(b), 0) for b in self.area_bins),
-            'weed': OrderedDict((self._bin_name(b), 0) for b in self.area_bins),
-        }
+        fp_breakdown_totals = self._init_fp_breakdown_totals()
 
-        # Flatten the per-image instance lists back into a single list
-        flat_results = []
-        for res in results:
-            flat_results.extend(res.get('instances', []))
+        confusion = np.zeros((3, 3), dtype=np.int64)
 
-        for item in flat_results:
-            class_name = item['class_name']
-            detected = int(item['detected'])
-            area = int(item['area'])
-            bin_name = self._area_to_bin(area)
+        for item in results:
+            self._accumulate_object_totals(object_totals, item['object_stats'])
+            self._accumulate_removed_totals(removed_totals, item['object_stats'])
+            self._accumulate_fp_breakdown_totals(
+                fp_breakdown_totals, item['object_stats'])
+            confusion += item['pixel_confusion']
 
-            class_totals[class_name] += 1
-            class_detected[class_name] += detected
+        self._finalize_object_totals(object_totals)
 
-            bin_totals[bin_name] += 1
-            bin_detected[bin_name] += detected
-            cls_bin_totals[class_name][bin_name] += 1
-            cls_bin_detected[class_name][bin_name] += detected
+        per_class = self._derive_per_class_from_confusion(confusion)
+        mean_iou = float(np.nanmean([x['iou'] for x in per_class]))
+        mean_precision = float(np.nanmean([x['precision'] for x in per_class]))
+        mean_recall = float(np.nanmean([x['recall'] for x in per_class]))
+        mean_f1 = float(np.nanmean([x['f1'] for x in per_class]))
 
-        total_instances = class_totals['crop'] + class_totals['weed']
-        total_detected = class_detected['crop'] + class_detected['weed']
+        weed_idx = 2
+        weed_iou = per_class[weed_idx]['iou']
+        weed_precision = per_class[weed_idx]['precision']
+        weed_recall = per_class[weed_idx]['recall']
+        weed_f1 = per_class[weed_idx]['f1']
+
+        weed_obj = object_totals[self.class2_label]['all']
 
         metrics = OrderedDict()
-        metrics['inst_crop_total'] = float(class_totals['crop'])
-        metrics['inst_crop_detected'] = float(class_detected['crop'])
-        metrics['inst_weed_total'] = float(class_totals['weed'])
-        metrics['inst_weed_detected'] = float(class_detected['weed'])
-        metrics['inst_total'] = float(total_instances)
-        metrics['inst_detected'] = float(total_detected)
 
-        metrics['inst_crop_detAcc'] = self._safe_ratio(class_detected['crop'], class_totals['crop']) * 100.0
-        metrics['inst_weed_detAcc'] = self._safe_ratio(class_detected['weed'], class_totals['weed']) * 100.0
-        metrics['inst_overall_detAcc'] = self._safe_ratio(total_detected, total_instances) * 100.0
+        # Backward-compatible aggregate object metrics (weed, all sizes).
+        # tp/fp map to IoP precision counts; fn maps to IoG recall misses.
+        metrics['obj_tp'] = float(weed_obj['tp_precision'])
+        metrics['obj_fp'] = float(weed_obj['fp_precision'])
+        metrics['obj_fn'] = float(weed_obj['fn_recall'])
+        metrics['obj_gt_total'] = float(weed_obj['gt_total'])
+        metrics['obj_pred_total'] = float(weed_obj['pred_total'])
+        metrics['obj_precision'] = round(weed_obj['precision'] * 100.0, 2)
+        metrics['obj_recall'] = round(weed_obj['recall'] * 100.0, 2)
+        metrics['obj_iop_precision'] = round(weed_obj['precision'] * 100.0, 2)
+        metrics['obj_iog_recall'] = round(weed_obj['recall'] * 100.0, 2)
+        metrics['obj_f1'] = round(weed_obj['f1'] * 100.0, 2)
 
-        for bin_name in bin_totals:
-            metrics[f'inst_bin_{bin_name}_total'] = float(bin_totals[bin_name])
-            metrics[f'inst_bin_{bin_name}_detected'] = float(bin_detected[bin_name])
-            metrics[f'inst_bin_{bin_name}_detAcc'] = (
-                self._safe_ratio(bin_detected[bin_name], bin_totals[bin_name]) * 100.0)
+        metrics['pixel_mIoU'] = round(mean_iou * 100.0, 2)
+        metrics['pixel_mPrecision'] = round(mean_precision * 100.0, 2)
+        metrics['pixel_mRecall'] = round(mean_recall * 100.0, 2)
+        metrics['pixel_mF1'] = round(mean_f1 * 100.0, 2)
 
-        for class_name in ('crop', 'weed'):
-            for bin_name in cls_bin_totals[class_name]:
-                metrics[f'inst_{class_name}_bin_{bin_name}_detAcc'] = (
-                    self._safe_ratio(
-                        cls_bin_detected[class_name][bin_name],
-                        cls_bin_totals[class_name][bin_name]) * 100.0)
+        for idx, cls_name in enumerate(self.class_names):
+            safe = cls_name.replace(' ', '_')
+            metrics[f'pixel_IoU_{safe}'] = round(per_class[idx]['iou'] * 100.0, 2)
+            metrics[f'pixel_Precision_{safe}'] = round(
+                per_class[idx]['precision'] * 100.0, 2)
+            metrics[f'pixel_Recall_{safe}'] = round(
+                per_class[idx]['recall'] * 100.0, 2)
+            metrics[f'pixel_F1_{safe}'] = round(per_class[idx]['f1'] * 100.0, 2)
 
-        self._log_summary_tables(
-            logger,
-            class_totals=class_totals,
-            class_detected=class_detected,
-            bin_totals=bin_totals,
-            bin_detected=bin_detected,
-            cls_bin_totals=cls_bin_totals,
-            cls_bin_detected=cls_bin_detected)
+        metrics['weed_iou'] = round(weed_iou * 100.0, 2)
+        metrics['weed_precision'] = round(weed_precision * 100.0, 2)
+        metrics['weed_recall'] = round(weed_recall * 100.0, 2)
+        metrics['weed_f1'] = round(weed_f1 * 100.0, 2)
 
-        rounded_metrics = OrderedDict()
-        for key, value in metrics.items():
-            if key.endswith('_detAcc'):
-                rounded_metrics[key] = round(value, 2)
-            else:
-                rounded_metrics[key] = value
+        for class_label in self.object_eval_class_labels:
+            class_name = self._class_name_for_label(class_label)
+            safe_cls = class_name.replace(' ', '_').replace('/', '_')
+            for bin_key in ('all', 'le100', 'gt100'):
+                obj_bin = object_totals[class_label][bin_key]
+                key_prefix = f'obj_{safe_cls}_{bin_key}'
+                metrics[f'{key_prefix}_gt_total'] = float(obj_bin['gt_total'])
+                metrics[f'{key_prefix}_pred_total'] = float(obj_bin['pred_total'])
+                metrics[f'{key_prefix}_tp'] = float(obj_bin['tp_precision'])
+                metrics[f'{key_prefix}_fp'] = float(obj_bin['fp_precision'])
+                metrics[f'{key_prefix}_fn'] = float(obj_bin['fn_recall'])
+                metrics[f'{key_prefix}_tp_precision'] = float(obj_bin['tp_precision'])
+                metrics[f'{key_prefix}_fp_precision'] = float(obj_bin['fp_precision'])
+                metrics[f'{key_prefix}_tp_recall'] = float(obj_bin['tp_recall'])
+                metrics[f'{key_prefix}_fn_recall'] = float(obj_bin['fn_recall'])
+                metrics[f'{key_prefix}_precision'] = round(
+                    obj_bin['precision'] * 100.0, 2)
+                metrics[f'{key_prefix}_recall'] = round(
+                    obj_bin['recall'] * 100.0, 2)
+                metrics[f'{key_prefix}_iop_precision'] = round(
+                    obj_bin['precision'] * 100.0, 2)
+                metrics[f'{key_prefix}_iog_recall'] = round(
+                    obj_bin['recall'] * 100.0, 2)
+                metrics[f'{key_prefix}_f1'] = round(obj_bin['f1'] * 100.0, 2)
+                metrics[f'{key_prefix}_removed_small'] = float(
+                    removed_totals[class_label][bin_key])
 
-        self._log_visualization_audit(logger=logger, results=flat_results)
+                fp_bin = fp_breakdown_totals[class_label][bin_key]
+                metrics[f'{key_prefix}_fp_edge_truncated'] = float(
+                    fp_bin['edge_fp'])
+                for gt_cat_key, gt_count in fp_bin['dominant_counts'].items():
+                    metrics[f'{key_prefix}_fp_on_{gt_cat_key}'] = float(gt_count)
 
-        self._vis_initialized = False
-        self._vis_sample_index = 0
-        self._vis_count_by_key = OrderedDict()
-        self._vis_manifest = []
-        return rounded_metrics
+        self._log_object_summary(
+            logger=logger,
+            object_totals=object_totals,
+            pixel_metrics=per_class,
+            fp_breakdown_totals=fp_breakdown_totals)
+        self._dump_top_fp_visualizations(logger=logger)
+        self._vis_fp_candidates = []
+        self._vis_case_seq = 0
 
-    def _prepare_vis_output_dir(self) -> None:
-        if self.vis_output_dir is None:
-            self._vis_eval_output_dir = None
+        return metrics
+
+    def _init_object_totals(self) -> Dict[int, Dict[str, Dict[str, float]]]:
+        out = {}
+        for class_label in self.object_eval_class_labels:
+            out[class_label] = {
+                'all': self._new_count_bucket(),
+                'le100': self._new_count_bucket(),
+                'gt100': self._new_count_bucket(),
+            }
+        return out
+
+    @staticmethod
+    def _new_count_bucket() -> Dict[str, float]:
+        return dict(
+            gt_total=0.0,
+            pred_total=0.0,
+            tp_precision=0.0,
+            fp_precision=0.0,
+            tp_recall=0.0,
+            fn_recall=0.0,
+            precision=float('nan'),
+            recall=float('nan'),
+            f1=float('nan'),
+        )
+
+    def _accumulate_object_totals(self,
+                                  totals: Dict[int, Dict[str, Dict[str, float]]],
+                                  sample_object: Dict[str, dict]) -> None:
+        sample_per_class = sample_object.get('per_class', {})
+        for class_label in self.object_eval_class_labels:
+            sample_stats = sample_per_class.get(class_label, {})
+            for bin_key in ('all', 'le100', 'gt100'):
+                src = sample_stats.get(bin_key, None)
+                if src is None:
+                    continue
+                dst = totals[class_label][bin_key]
+                dst['gt_total'] += float(src.get('gt_total', 0.0))
+                dst['pred_total'] += float(src.get('pred_total', 0.0))
+                dst['tp_precision'] += float(src.get('tp_precision', 0.0))
+                dst['fp_precision'] += float(src.get('fp_precision', 0.0))
+                dst['tp_recall'] += float(src.get('tp_recall', 0.0))
+                dst['fn_recall'] += float(src.get('fn_recall', 0.0))
+
+    def _accumulate_removed_totals(self,
+                                   removed_totals: Dict[int, Dict[str, float]],
+                                   sample_object: Dict[str, dict]) -> None:
+        sample_removed = sample_object.get('removed_small', {})
+        for class_label in self.object_eval_class_labels:
+            class_removed = sample_removed.get(class_label, {})
+            for bin_key in ('all', 'le100', 'gt100'):
+                removed_totals[class_label][bin_key] += float(
+                    class_removed.get(bin_key, 0.0))
+
+    def _init_fp_breakdown_totals(self) -> Dict[int, Dict[str, dict]]:
+        out: Dict[int, Dict[str, dict]] = {}
+        for class_label in self.object_eval_class_labels:
+            out[class_label] = {}
+            for bin_key in ('all', 'le100', 'gt100'):
+                out[class_label][bin_key] = dict(
+                    edge_fp=0.0,
+                    dominant_counts=self._new_fp_dominant_counts())
+        return out
+
+    def _new_fp_dominant_counts(self) -> Dict[str, float]:
+        return {
+            self._fp_cat_name(self.class0_label): 0.0,
+            self._fp_cat_name(self.class1_label): 0.0,
+            self._fp_cat_name(self.class2_label): 0.0,
+            'ignore': 0.0,
+            'other': 0.0,
+        }
+
+    def _accumulate_fp_breakdown_totals(self,
+                                        totals: Dict[int, Dict[str, dict]],
+                                        sample_object: Dict[str, dict]) -> None:
+        sample_fp_meta = sample_object.get('fp_meta', {})
+        for class_label in self.object_eval_class_labels:
+            class_meta = sample_fp_meta.get(class_label, {})
+            for bin_key in ('all', 'le100', 'gt100'):
+                src = class_meta.get(bin_key, None)
+                if src is None:
+                    continue
+                dst = totals[class_label][bin_key]
+                dst['edge_fp'] += float(src.get('edge_fp', 0.0))
+                src_dom = src.get('dominant_counts', {})
+                dst_dom = dst['dominant_counts']
+                for cat_key in dst_dom.keys():
+                    dst_dom[cat_key] += float(src_dom.get(cat_key, 0.0))
+
+    def _finalize_object_totals(self,
+                                totals: Dict[int, Dict[str, Dict[str, float]]]) -> None:
+        for class_label in self.object_eval_class_labels:
+            for bin_key in ('all', 'le100', 'gt100'):
+                bucket = totals[class_label][bin_key]
+                precision = self._safe_div(
+                    bucket['tp_precision'], bucket['tp_precision'] + bucket['fp_precision'])
+                recall = self._safe_div(
+                    bucket['tp_recall'], bucket['tp_recall'] + bucket['fn_recall'])
+                bucket['precision'] = precision
+                bucket['recall'] = recall
+                bucket['f1'] = self._f1(precision, recall)
+
+    def _class_name_for_label(self, class_label: int) -> str:
+        if class_label == self.class0_label:
+            return self.class_names[0]
+        if class_label == self.class1_label:
+            return self.class_names[1]
+        if class_label == self.class2_label:
+            return self.class_names[2]
+        return str(class_label)
+
+    @staticmethod
+    def _size_bin(area: int) -> str:
+        # Keep legacy bin keys for compatibility, but use tiny < 100 pixels.
+        return 'le100' if int(area) < 100 else 'gt100'
+
+    def _fp_cat_name(self, class_label: int) -> str:
+        return self._class_name_for_label(class_label).replace(' ', '_').replace('/', '_')
+
+    def _dominant_gt_category(self,
+                              comp_mask: np.ndarray,
+                              gt_label: np.ndarray) -> str:
+        gt_vals = gt_label[comp_mask]
+        if gt_vals.size == 0:
+            return 'other'
+        uniq_vals, uniq_cnts = np.unique(gt_vals, return_counts=True)
+        dom = int(uniq_vals[np.argmax(uniq_cnts)])
+        if dom == self.class0_label:
+            return self._fp_cat_name(self.class0_label)
+        if dom == self.class1_label:
+            return self._fp_cat_name(self.class1_label)
+        if dom == self.class2_label:
+            return self._fp_cat_name(self.class2_label)
+        if dom == self.ignore_index or dom in self.ignore_label_ids:
+            return 'ignore'
+        return 'other'
+
+    @staticmethod
+    def _touches_image_edge(comp_mask: np.ndarray) -> bool:
+        return bool(
+            comp_mask[0, :].any() or comp_mask[-1, :].any() or
+            comp_mask[:, 0].any() or comp_mask[:, -1].any())
+
+    def _collect_vis_fp_candidate(self,
+                                  data_sample: dict,
+                                  pred_label: np.ndarray,
+                                  gt_label: np.ndarray,
+                                  instance_map: np.ndarray) -> None:
+        img_path = self._resolve_img_path(data_sample)
+        if img_path is None or (not osp.exists(img_path)):
             return
 
-        if self.vis_per_eval_subdir:
-            stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-            self._vis_eval_output_dir = osp.join(
-                self.vis_output_dir, f'eval_{stamp}_pid{os.getpid()}')
-        else:
-            self._vis_eval_output_dir = self.vis_output_dir
+        analysis = self._analyze_weed_islands_for_visualization(
+            pred_label=pred_label,
+            gt_label=gt_label,
+            instance_map=instance_map)
+        small_fp_count = int(analysis['small_fp_count'])
+        if small_fp_count <= 0:
+            return
 
-        mkdir_or_exist(self._vis_eval_output_dir)
-        logger: MMLogger = MMLogger.get_current_instance()
-        print_log(f'instance detection visualizations will be saved to: {self._vis_eval_output_dir}',
-                  logger=logger)
+        candidate = dict(
+            rank_score=small_fp_count,
+            seq=self._vis_case_seq,
+            img_path=img_path,
+            pred_label=np.asarray(pred_label, dtype=np.int64),
+            gt_label=np.asarray(gt_label, dtype=np.int64),
+            comp_records=analysis['components'],
+            fn_masks=analysis['fn_masks'],
+            small_fp_count=small_fp_count,
+            small_tp_count=int(analysis['small_tp_count']),
+            fn_count=int(analysis['fn_count']),
+        )
+        self._vis_case_seq += 1
 
-    def _evaluate_single(self, pred_label: np.ndarray, gt_label: np.ndarray,
-                         instance_map: np.ndarray) -> List[dict]:
-        records = self._evaluate_single_records(pred_label, gt_label, instance_map)
-        return [
-            dict(class_name=record['class_name'], area=record['area'], detected=record['detected'])
-            for record in records
-        ]
+        self._vis_fp_candidates.append(candidate)
+        self._vis_fp_candidates.sort(
+            key=lambda x: (x['rank_score'], x['seq']), reverse=True)
+        if len(self._vis_fp_candidates) > self.vis_fp_case_max:
+            self._vis_fp_candidates = self._vis_fp_candidates[:self.vis_fp_case_max]
 
-    def _evaluate_single_records(self, pred_label: np.ndarray, gt_label: np.ndarray,
-                                 instance_map: np.ndarray) -> List[dict]:
-        sample_stats = []
-        instance_ids = np.unique(instance_map)
-        instance_ids = instance_ids[instance_ids > 0]
+    def _analyze_weed_islands_for_visualization(self,
+                                                pred_label: np.ndarray,
+                                                gt_label: np.ndarray,
+                                                instance_map: np.ndarray) -> Dict[str, object]:
+        """Classify predicted weed islands for visualization (TP/FP/FN)."""
+        class_label = self.class2_label
 
-        for instance_id in instance_ids:
-            inst_mask = instance_map == instance_id
-            area = int(inst_mask.sum())
-            if area <= 0:
+        gt_instance_ids = np.unique(instance_map[gt_label == class_label])
+        gt_instance_ids = gt_instance_ids[gt_instance_ids > 0]
+        gt_instance_ids = [int(x) for x in gt_instance_ids]
+
+        pred_mask = pred_label == class_label
+        pred_labeled, n_pred = sp_ndimage.label(pred_mask)
+
+        comp_records = []
+        gt_to_components: Dict[int, List[int]] = defaultdict(list)
+
+        for comp_id in range(1, n_pred + 1):
+            comp_mask = pred_labeled == comp_id
+            if not comp_mask.any():
                 continue
 
-            class_name, class_label = self._instance_class(inst_mask, gt_label)
-            if class_name is None:
+            comp_area = int(comp_mask.sum())
+            if comp_area < self.pred_island_min_area:
+                continue
+            class_overlap_mask = np.logical_and(comp_mask, gt_label == class_label)
+            overlapping_gt_ids = np.unique(instance_map[class_overlap_mask])
+            overlapping_gt_ids = overlapping_gt_ids[overlapping_gt_ids > 0]
+            overlapping_gt_ids = [int(x) for x in overlapping_gt_ids]
+
+            is_fp_seed = len(overlapping_gt_ids) == 0
+            rec = dict(
+                comp_id=int(comp_id),
+                area=comp_area,
+                mask=comp_mask,
+                overlap_gt_ids=overlapping_gt_ids,
+                is_fp_seed=is_fp_seed,
+                is_tp=False,
+                is_fp=bool(is_fp_seed),
+            )
+            comp_records.append(rec)
+
+            for gt_id in overlapping_gt_ids:
+                gt_to_components[gt_id].append(int(comp_id))
+
+        fn_masks = []
+        tp_gt_ids = set()
+        for gt_id in gt_instance_ids:
+            gt_mask = instance_map == gt_id
+            gt_area = int(gt_mask.sum())
+            if gt_area <= 0:
                 continue
 
-            pred_mask_cls = pred_label == class_label
-            inter = int(np.logical_and(inst_mask, pred_mask_cls).sum())
+            comp_ids = gt_to_components.get(gt_id, [])
+            if len(comp_ids) == 0:
+                fn_masks.append(dict(mask=gt_mask, area=gt_area))
+                continue
 
-            if self.overlap_mode == 'gt':
-                overlap = inter / float(area)
+            virtual_pred_mask = np.isin(pred_labeled, comp_ids)
+            inter = int(np.logical_and(virtual_pred_mask, gt_mask).sum())
+            iog = self._safe_div(inter, gt_area)
+
+            if (not np.isnan(iog)) and (iog >= self.object_iog_thr):
+                tp_gt_ids.add(int(gt_id))
             else:
-                union = int(np.logical_or(inst_mask, pred_mask_cls).sum())
-                overlap = inter / float(union) if union > 0 else 0.0
+                fn_masks.append(dict(mask=gt_mask, area=gt_area))
 
-            bin_name = self._area_to_bin(area)
+        # Exclusive component assignment: TP iff overlaps any TP GT instance.
+        # Otherwise FP (either no overlap or overlaps only FN GT instances).
+        for rec in comp_records:
+            overlap_ids = rec['overlap_gt_ids']
+            is_tp_comp = any(gt_id in tp_gt_ids for gt_id in overlap_ids)
+            rec['is_tp'] = bool(is_tp_comp)
+            rec['is_fp'] = not rec['is_tp']
 
-            sample_stats.append(
-                dict(
-                    instance_id=int(instance_id),
-                    class_name=class_name,
-                    class_label=class_label,
-                    area=area,
-                    detected=overlap >= self.overlap_thr,
-                    overlap=overlap,
-                    bin_name=bin_name,
-                    inst_mask=inst_mask,
-                ))
+        small_fp_count = 0
+        small_tp_count = 0
+        for rec in comp_records:
+            if int(rec['area']) <= 100:
+                if rec['is_fp']:
+                    small_fp_count += 1
+                elif rec['is_tp']:
+                    small_tp_count += 1
 
-        return sample_stats
+        return dict(
+            components=comp_records,
+            fn_masks=fn_masks,
+            fn_count=len(fn_masks),
+            small_fp_count=small_fp_count,
+            small_tp_count=small_tp_count,
+        )
+
+    def _dump_top_fp_visualizations(self, logger: MMLogger) -> None:
+        if self.vis_output_dir is None or self.vis_fp_case_max <= 0:
+            return
+        if len(self._vis_fp_candidates) == 0:
+            print_log('No FP-focused weed visualization cases selected.', logger=logger)
+            return
+
+        out_dir = osp.join(self.vis_output_dir, 'fp_focus_weed_small')
+        mkdir_or_exist(out_dir)
+
+        # Highest small FP count first.
+        selected = sorted(
+            self._vis_fp_candidates,
+            key=lambda x: (x['rank_score'], x['seq']),
+            reverse=True)[:self.vis_fp_case_max]
+
+        for rank, item in enumerate(selected, start=1):
+            vis_img = self._compose_fp_focus_visual(item)
+            if vis_img is None:
+                continue
+            basename = osp.splitext(osp.basename(item['img_path']))[0]
+            out_name = (
+                f'{rank:02d}_{basename}_smallfp{int(item["small_fp_count"])}'
+                f'_smalltp{int(item["small_tp_count"])}_fn{int(item["fn_count"])}.png')
+            out_path = osp.join(out_dir, out_name)
+            Image.fromarray(vis_img).save(out_path)
+
+        print_log(
+            f'Saved {len(selected)} FP-focused weed visualization images to: {out_dir}',
+            logger=logger)
+
+    def _compose_fp_focus_visual(self, item: dict) -> Optional[np.ndarray]:
+        rgb = self._load_rgb_image(item['img_path'])
+        gt_label = item['gt_label']
+        pred_label = item['pred_label']
+        if rgb.shape[:2] != gt_label.shape:
+            rgb = self._resize_rgb_nearest(rgb, gt_label.shape)
+
+        base = np.asarray(rgb, dtype=np.uint8)
+        dim_bg = np.clip(base.astype(np.float32) * self.vis_bg_alpha, 0, 255).astype(np.uint8)
+
+        # Left panel: GT semantic overlay on dim background.
+        left = dim_bg.copy()
+        crop_mask = gt_label == self.class1_label
+        weed_mask = gt_label == self.class2_label
+        crop_color = np.array([0, 255, 0], dtype=np.uint8)
+        weed_color = np.array([255, 0, 0], dtype=np.uint8)
+        if crop_mask.any():
+            left[crop_mask] = crop_color
+        if weed_mask.any():
+            left[weed_mask] = weed_color
+
+        # Right panel: model segmentation map + TP/FP/FN contour loops.
+        right = self._render_prediction_segmentation(pred_label)
+        tp_color = np.array([255, 165, 0], dtype=np.uint8)   # orange
+        fp_color = np.array([0, 0, 255], dtype=np.uint8)     # blue
+        fn_color = np.array([0, 128, 128], dtype=np.uint8)   # teal
+
+        for rec in item['comp_records']:
+            mask = rec['mask']
+            if rec['is_tp']:
+                right = self._draw_mask_loop(right, mask, tp_color)
+            elif rec['is_fp']:
+                right = self._draw_mask_loop(right, mask, fp_color)
+
+        for fn_item in item['fn_masks']:
+            right = self._draw_mask_loop(right, fn_item['mask'], fn_color)
+
+        pair = np.concatenate([left, right], axis=1)
+        pil_img = Image.fromarray(pair)
+        draw = ImageDraw.Draw(pil_img)
+        h, w = pair.shape[:2]
+        mid_x = w // 2
+
+        draw.line([(mid_x, 0), (mid_x, h - 1)], fill=(255, 255, 255), width=2)
+        draw.rectangle([(0, 0), (360, 20)], fill=(0, 0, 0))
+        draw.text((4, 2), 'GT (dim bg): crop=green, weed=red', fill=(255, 255, 255))
+        draw.rectangle([(mid_x, 0), (min(mid_x + 520, w - 1), 20)], fill=(0, 0, 0))
+        draw.text(
+            (mid_x + 4, 2),
+            'Pred segmentation + loops: TP=orange, FP=blue, FN=teal',
+            fill=(255, 255, 255))
+
+        footer = (
+            f'smallFP<=100: {int(item["small_fp_count"])} | '
+            f'smallTP<=100: {int(item["small_tp_count"])} | '
+            f'FN(gt weeds): {int(item["fn_count"])} | '
+            f'IoG>= {self.object_iog_thr * 100.0:.1f}% | '
+            f'IoP>= {self.object_iop_thr * 100.0:.1f}%')
+        draw.rectangle([(mid_x, 20), (min(mid_x + 620, w - 1), 40)], fill=(0, 0, 0))
+        draw.text((mid_x + 4, 22), footer, fill=(255, 255, 255))
+
+        # Draw per-segment labels with pixel areas on right panel.
+        for idx, rec in enumerate(item['comp_records'], start=1):
+            status = 'TP' if rec['is_tp'] else ('FP' if rec['is_fp'] else None)
+            if status is None:
+                continue
+            ys, xs = np.where(rec['mask'])
+            if ys.size == 0:
+                continue
+            x1, y1 = int(xs.min()) + mid_x, int(ys.min())
+            label = f'#{idx} {status} A={int(rec["area"])}'
+            ty = max(40, y1 - 12)
+            draw.rectangle([(x1, ty), (min(x1 + 150, w - 1), ty + 12)], fill=(0, 0, 0))
+            draw.text((x1 + 2, ty), label, fill=(255, 255, 255))
+
+        for fn_idx, fn_item in enumerate(item['fn_masks'], start=1):
+            ys, xs = np.where(fn_item['mask'])
+            if ys.size == 0:
+                continue
+            x1, y1 = int(xs.min()) + mid_x, int(ys.min())
+            label = f'FN#{fn_idx} A={int(fn_item["area"])}'
+            ty = max(40, y1 - 12)
+            draw.rectangle([(x1, ty), (min(x1 + 150, w - 1), ty + 12)], fill=(0, 0, 0))
+            draw.text((x1 + 2, ty), label, fill=(255, 255, 255))
+
+        return np.asarray(pil_img, dtype=np.uint8)
+
+    def _render_prediction_segmentation(self, pred_label: np.ndarray) -> np.ndarray:
+        """Render model semantic prediction as RGB map."""
+        h, w = pred_label.shape
+        seg = np.zeros((h, w, 3), dtype=np.uint8)
+        # class0 background/soil -> black, class1 crop -> green, class2 weed -> red
+        seg[pred_label == self.class1_label] = np.array([0, 255, 0], dtype=np.uint8)
+        seg[pred_label == self.class2_label] = np.array([255, 0, 0], dtype=np.uint8)
+        return seg
+
+    @staticmethod
+    def _draw_mask_loop(canvas: np.ndarray,
+                        mask: np.ndarray,
+                        color: np.ndarray) -> np.ndarray:
+        """Draw a thin contour loop around a binary mask."""
+        if not mask.any():
+            return canvas
+        eroded = sp_ndimage.binary_erosion(mask, structure=np.ones((3, 3), dtype=bool))
+        boundary = np.logical_and(mask, np.logical_not(eroded))
+        out = canvas.copy()
+        out[boundary] = color
+        return out
 
     def _resolve_img_path(self, data_sample: dict) -> Optional[str]:
         img_path = data_sample.get('img_path', None)
@@ -333,183 +773,325 @@ class InstanceDetectionMetric(BaseMetric):
             img_path = data_sample.metainfo.get('img_path', None)
         return img_path
 
-    def _load_rgb_image(self, img_path: str) -> np.ndarray:
+    @staticmethod
+    def _load_rgb_image(img_path: str) -> np.ndarray:
         return np.array(Image.open(img_path).convert('RGB'), dtype=np.uint8)
 
-    def _dump_visualizations(self,
-                             img_path: str,
-                             rgb_image: np.ndarray,
-                             pred_label: np.ndarray,
-                             instance_records: List[dict]) -> None:
-        basename = osp.splitext(osp.basename(img_path))[0]
-
-        for record in instance_records:
-            if not self._should_visualize_record(record):
-                continue
-
-            class_name = record['class_name']
-            detected = bool(record['detected'])
-            bin_name = record['bin_name']
-            status = 'detected' if detected else 'missed'
-
-            vis_root = self._vis_eval_output_dir or self.vis_output_dir
-            out_dir = osp.join(vis_root, bin_name, class_name, status)
-            mkdir_or_exist(out_dir)
-
-            vis_img = self._compose_instance_visual(
-                rgb_image=rgb_image,
-                pred_label=pred_label,
-                record=record)
-
-            out_name = (
-                f'{self._vis_sample_index:08d}_{basename}_inst{record["instance_id"]}'
-                f'_area{record["area"]}_{status}.png')
-            out_path = osp.join(out_dir, out_name)
-            Image.fromarray(vis_img).save(out_path)
-
-            count_key = (bin_name, class_name, status)
-            self._vis_count_by_key[count_key] = self._vis_count_by_key.get(count_key, 0) + 1
-            self._vis_manifest.append(dict(
-                path=out_path,
-                bin_name=bin_name,
-                class_name=class_name,
-                status=status,
-                area=int(record['area']),
-                instance_id=int(record['instance_id']),
-                overlap=float(record['overlap']),
-            ))
-            self._vis_sample_index += 1
-
-    def _should_visualize_record(self, record: dict) -> bool:
-        if self.vis_area_bins is not None and record['bin_name'] not in self.vis_area_bins:
-            return False
-
-        if self.vis_class != 'all' and record['class_name'] != self.vis_class:
-            return False
-        return True
-
-    def _compose_instance_visual(self,
-                                 rgb_image: np.ndarray,
-                                 pred_label: np.ndarray,
-                                 record: dict) -> np.ndarray:
-        base = np.asarray(rgb_image, dtype=np.uint8).copy()
-        inst_mask = record['inst_mask']
-
-        if record['class_name'] == 'weed':
-            gt_color = np.array([255, 0, 0], dtype=np.uint8)
-        else:
-            gt_color = np.array([0, 255, 0], dtype=np.uint8)
-        pred_color = np.array([0, 0, 255], dtype=np.uint8)
-
-        base[inst_mask] = (
-            (1.0 - self.vis_gt_alpha) * base[inst_mask]
-            + self.vis_gt_alpha * gt_color
-        ).astype(np.uint8)
-
-        draw_pred = (not self.show_pred_for_detected_only) or bool(record['detected'])
-        if draw_pred:
-            pred_mask_cls = pred_label == record['class_label']
-            pred_on_instance = np.logical_and(pred_mask_cls, inst_mask)
-            base[pred_on_instance] = (
-                (1.0 - self.vis_pred_alpha) * base[pred_on_instance]
-                + self.vis_pred_alpha * pred_color
-            ).astype(np.uint8)
-
-        ys, xs = np.where(inst_mask)
-        y1, y2 = int(ys.min()), int(ys.max())
-        x1, x2 = int(xs.min()), int(xs.max())
-
-        pil_img = Image.fromarray(base)
-        drawer = ImageDraw.Draw(pil_img)
-        edge_color = (255, 255, 255)
-        drawer.rectangle([(x1, y1), (x2, y2)], outline=edge_color, width=2)
-
-        status = 'detected' if record['detected'] else 'missed'
-        text = (
-            f'{record["class_name"]} | area={record["area"]} px | '
-            f'bin={record["bin_name"]} | {status} | ov={record["overlap"]:.3f}')
-        text_x = x1
-        text_y = max(0, y1 - 14)
-        drawer.rectangle([(text_x, text_y), (min(text_x + 820, base.shape[1] - 1), text_y + 14)], fill=(0, 0, 0))
-        drawer.text((text_x + 2, text_y), text, fill=(255, 255, 255))
+    @staticmethod
+    def _resize_rgb_nearest(rgb_image: np.ndarray,
+                            target_shape: Tuple[int, int]) -> np.ndarray:
+        dst_h, dst_w = target_shape
+        pil_img = Image.fromarray(rgb_image)
+        pil_img = pil_img.resize((dst_w, dst_h), resample=Image.BILINEAR)
         return np.array(pil_img, dtype=np.uint8)
 
-    def _log_visualization_audit(self, logger: MMLogger, results: list) -> None:
-        if self.vis_output_dir is None:
-            return
+    def _compute_object_level_stats(self,
+                                    pred_label: np.ndarray,
+                                    gt_label: np.ndarray,
+                                    instance_map: np.ndarray) -> Dict[str, int]:
+        """Compute IoG-recall and IoP-precision by class and size bins.
 
-        vis_root = self._vis_eval_output_dir or self.vis_output_dir
+        Recall bins are defined by GT instance area and use IoG thresholding.
+        Precision bins are defined by predicted component area and use IoP
+        thresholding.
+        """
+        out = {'per_class': {}}
+        out['fp_meta'] = {}
 
-        if len(self._vis_manifest) > 0:
-            manifest_path = osp.join(vis_root, 'manifest.json')
-            with open(manifest_path, 'w') as f:
-                json.dump(self._vis_manifest, f, indent=2)
-            print_log(f'instance detection visualization manifest: {manifest_path}', logger=logger)
+        for class_label in self.object_eval_class_labels:
+            class_out = {
+                'all': self._new_count_bucket(),
+                'le100': self._new_count_bucket(),
+                'gt100': self._new_count_bucket(),
+            }
+            class_removed = {'all': 0.0, 'le100': 0.0, 'gt100': 0.0}
+            class_fp_meta = {
+                'all': dict(edge_fp=0.0, dominant_counts=self._new_fp_dominant_counts()),
+                'le100': dict(edge_fp=0.0, dominant_counts=self._new_fp_dominant_counts()),
+                'gt100': dict(edge_fp=0.0, dominant_counts=self._new_fp_dominant_counts()),
+            }
 
-        selected_total = 0
-        selected_detected = 0
-        for item in results:
-            class_name = item['class_name']
-            if self.vis_class != 'all' and class_name != self.vis_class:
-                continue
-            bin_name = self._area_to_bin(int(item['area']))
-            if self.vis_area_bins is not None and bin_name not in self.vis_area_bins:
-                continue
-            selected_total += 1
-            selected_detected += int(item['detected'])
+            gt_instance_ids = np.unique(instance_map[gt_label == class_label])
+            gt_instance_ids = gt_instance_ids[gt_instance_ids > 0]
+            gt_instance_ids = [int(x) for x in gt_instance_ids]
 
-        saved_detected = 0
-        saved_missed = 0
-        for (bin_name, class_name, status), count in self._vis_count_by_key.items():
-            if self.vis_area_bins is not None and bin_name not in self.vis_area_bins:
-                continue
-            if self.vis_class != 'all' and class_name != self.vis_class:
-                continue
-            if status == 'detected':
-                saved_detected += count
-            else:
-                saved_missed += count
-        saved_total = saved_detected + saved_missed
+            gt_to_components: Dict[int, List[int]] = defaultdict(list)
+            pred_mask = pred_label == class_label
+            pred_labeled, n_pred = sp_ndimage.label(pred_mask)
+
+            for comp_id in range(1, n_pred + 1):
+                comp_mask = pred_labeled == comp_id
+                if not comp_mask.any():
+                    continue
+
+                comp_area = int(comp_mask.sum())
+                if comp_area < self.pred_island_min_area:
+                    rem_bin = self._size_bin(comp_area)
+                    class_removed['all'] += 1
+                    class_removed[rem_bin] += 1
+                    continue
+                comp_bin = self._size_bin(comp_area)
+                class_out['all']['pred_total'] += 1
+                class_out[comp_bin]['pred_total'] += 1
+
+                class_overlap_mask = np.logical_and(comp_mask, gt_label == class_label)
+                overlapping_gt_ids = np.unique(instance_map[class_overlap_mask])
+                overlapping_gt_ids = overlapping_gt_ids[overlapping_gt_ids > 0]
+
+                for gt_id in overlapping_gt_ids:
+                    gt_to_components[int(gt_id)].append(int(comp_id))
+
+                # IoP precision decision for this predicted island.
+                inter_class = int(class_overlap_mask.sum())
+                iop = self._safe_div(inter_class, comp_area)
+                is_precision_tp = (not np.isnan(iop)) and (iop >= self.object_iop_thr)
+
+                if is_precision_tp:
+                    class_out['all']['tp_precision'] += 1
+                    class_out[comp_bin]['tp_precision'] += 1
+                else:
+                    class_out['all']['fp_precision'] += 1
+                    class_out[comp_bin]['fp_precision'] += 1
+
+                    dominant_gt_cat = self._dominant_gt_category(comp_mask, gt_label)
+                    class_fp_meta['all']['dominant_counts'][dominant_gt_cat] += 1
+                    class_fp_meta[comp_bin]['dominant_counts'][dominant_gt_cat] += 1
+                    if self._touches_image_edge(comp_mask):
+                        class_fp_meta['all']['edge_fp'] += 1
+                        class_fp_meta[comp_bin]['edge_fp'] += 1
+
+            for gt_id in gt_instance_ids:
+                gt_mask = instance_map == gt_id
+                gt_area = int(gt_mask.sum())
+                if gt_area <= 0:
+                    continue
+
+                gt_bin = self._size_bin(gt_area)
+                class_out['all']['gt_total'] += 1
+                class_out[gt_bin]['gt_total'] += 1
+
+                comp_ids = gt_to_components.get(gt_id, [])
+                if len(comp_ids) == 0:
+                    class_out['all']['fn_recall'] += 1
+                    class_out[gt_bin]['fn_recall'] += 1
+                    continue
+
+                virtual_pred_mask = np.isin(pred_labeled, comp_ids)
+                inter = int(np.logical_and(virtual_pred_mask, gt_mask).sum())
+                iog = self._safe_div(inter, gt_area)
+
+                if (not np.isnan(iog)) and (iog >= self.object_iog_thr):
+                    class_out['all']['tp_recall'] += 1
+                    class_out[gt_bin]['tp_recall'] += 1
+                else:
+                    class_out['all']['fn_recall'] += 1
+                    class_out[gt_bin]['fn_recall'] += 1
+
+            for bin_key in ('all', 'le100', 'gt100'):
+                bucket = class_out[bin_key]
+                precision = self._safe_div(
+                    bucket['tp_precision'], bucket['tp_precision'] + bucket['fp_precision'])
+                recall = self._safe_div(
+                    bucket['tp_recall'], bucket['tp_recall'] + bucket['fn_recall'])
+                bucket['precision'] = precision
+                bucket['recall'] = recall
+                bucket['f1'] = self._f1(precision, recall)
+
+            out['per_class'][class_label] = class_out
+            if 'removed_small' not in out:
+                out['removed_small'] = {}
+            out['removed_small'][class_label] = class_removed
+            out['fp_meta'][class_label] = class_fp_meta
+
+        return out
+
+    def _compute_pixel_confusion_matrix(self,
+                                        pred_label: np.ndarray,
+                                        gt_label: np.ndarray) -> np.ndarray:
+        """Compute 3x3 confusion matrix for [class0, class1, class2]."""
+        conf = np.zeros((3, 3), dtype=np.int64)
+
+        valid_mask = gt_label != self.ignore_index
+        for ignored_label in self.ignore_label_ids:
+            valid_mask &= (gt_label != ignored_label)
+
+        label_to_index = {
+            self.class0_label: 0,
+            self.class1_label: 1,
+            self.class2_label: 2,
+        }
+
+        gt_valid = gt_label[valid_mask]
+        pred_valid = pred_label[valid_mask]
+
+        in_eval = np.isin(gt_valid, self.eval_label_ids) & np.isin(
+            pred_valid, self.eval_label_ids)
+        gt_valid = gt_valid[in_eval]
+        pred_valid = pred_valid[in_eval]
+
+        for gt_id, pred_id in zip(gt_valid, pred_valid):
+            conf[label_to_index[int(gt_id)], label_to_index[int(pred_id)]] += 1
+
+        return conf
+
+    def _derive_per_class_from_confusion(self,
+                                         confusion: np.ndarray) -> List[Dict[str, float]]:
+        out = []
+        for idx in range(3):
+            tp = float(confusion[idx, idx])
+            fp = float(confusion[:, idx].sum() - confusion[idx, idx])
+            fn = float(confusion[idx, :].sum() - confusion[idx, idx])
+            iou = self._safe_div(tp, tp + fp + fn)
+            precision = self._safe_div(tp, tp + fp)
+            recall = self._safe_div(tp, tp + fn)
+            f1 = self._f1(precision, recall)
+            out.append(
+                dict(
+                    tp=tp,
+                    fp=fp,
+                    fn=fn,
+                    iou=iou,
+                    precision=precision,
+                    recall=recall,
+                    f1=f1,
+                ))
+        return out
+
+    def _log_object_summary(self,
+                            logger: MMLogger,
+                            object_totals: Dict[int, Dict[str, Dict[str, float]]],
+                            pixel_metrics: List[Dict[str, float]],
+                            fp_breakdown_totals: Dict[int, Dict[str, dict]]) -> None:
+        table = PrettyTable()
+        table.field_names = [
+            'Plant Category',
+            'IoU',
+            f'Recall (IoG>={self.object_iog_thr * 100.0:.1f}%)',
+            f'Obj-Precision (IoP>={self.object_iop_thr * 100.0:.1f}%)',
+            'Pixel-Precision',
+            'F1',
+            f'Pred on {self._fp_cat_name(self.class0_label)}',
+            f'Pred on {self._fp_cat_name(self.class1_label)}',
+        ]
+
+        row_specs = [
+            (self.class1_label, 'le100', 'Tiny crop (<100px)'),
+            (self.class1_label, 'gt100', 'Large crop (>=100px)'),
+            (self.class2_label, 'le100', 'Tiny weed (<100px)'),
+            (self.class2_label, 'gt100', 'Large weed (>=100px)'),
+        ]
+
+        for class_label, bin_key, row_name in row_specs:
+            pixel_idx = 1 if class_label == self.class1_label else 2
+            px = pixel_metrics[pixel_idx]
+            obj = object_totals[class_label][bin_key]
+            fp_bin = fp_breakdown_totals[class_label][bin_key]
+            dom = fp_bin['dominant_counts']
+
+            table.add_row([
+                row_name,
+                np.round(px['iou'] * 100.0, 2),
+                np.round(obj['recall'] * 100.0, 2),
+                np.round(obj['precision'] * 100.0, 2),
+                np.round(px['precision'] * 100.0, 2),
+                np.round(obj['f1'] * 100.0, 2),
+                int(dom[self._fp_cat_name(self.class0_label)]),
+                int(dom[self._fp_cat_name(self.class1_label)]),
+            ])
 
         print_log(
-            'instance detection vis audit: '
-            f'expected_total={selected_total}, expected_detected={selected_detected}, '
-            f'expected_missed={selected_total - selected_detected}, '
-            f'saved_total={saved_total}, saved_detected={saved_detected}, saved_missed={saved_missed}',
+            'single summary table (tiny/large crop & weed) with IoG/IoP '
+            'object metrics and FP source counts:',
             logger=logger)
+        print_log('\n' + table.get_string(), logger=logger)
 
-        if saved_total != selected_total:
-            print_log(
-                'WARNING: visualization count mismatch detected for current eval run. '
-                'Check manifest.json for exact saved entries.',
-                logger=logger)
+    def _log_pixel_summary(self,
+                           logger: MMLogger,
+                           confusion: np.ndarray,
+                           per_class: List[Dict[str, float]]) -> None:
+        conf_table = PrettyTable()
+        conf_table.field_names = [
+            'GT\\Pred',
+            self.class_names[0],
+            self.class_names[1],
+            self.class_names[2],
+        ]
+        for row_idx in range(3):
+            conf_table.add_row([
+                self.class_names[row_idx],
+                int(confusion[row_idx, 0]),
+                int(confusion[row_idx, 1]),
+                int(confusion[row_idx, 2]),
+            ])
 
-    def _instance_class(self, inst_mask: np.ndarray,
-                        gt_label: np.ndarray) -> Tuple[Optional[str], Optional[int]]:
-        labels = gt_label[inst_mask]
-        labels = labels[np.logical_or(labels == self.crop_label,
-                                      labels == self.weed_label)]
-        if labels.size == 0:
-            return None, None
+        cls_table = PrettyTable()
+        cls_table.field_names = ['Class', 'IoU', 'Precision', 'Recall', 'F1']
+        for idx, cls_name in enumerate(self.class_names):
+            cls_table.add_row([
+                cls_name,
+                np.round(per_class[idx]['iou'] * 100.0, 2),
+                np.round(per_class[idx]['precision'] * 100.0, 2),
+                np.round(per_class[idx]['recall'] * 100.0, 2),
+                np.round(per_class[idx]['f1'] * 100.0, 2),
+            ])
 
-        uniq, counts = np.unique(labels, return_counts=True)
-        class_label = int(uniq[np.argmax(counts)])
-        class_name = self._label_to_name.get(class_label, None)
-        return class_name, class_label
+        print_log('pixel-level 3x3 confusion matrix:', logger=logger)
+        print_log('\n' + conf_table.get_string(), logger=logger)
+        print_log('pixel-level class metrics:', logger=logger)
+        print_log('\n' + cls_table.get_string(), logger=logger)
+
+    def _log_fp_breakdown_summary(self,
+                                  logger: MMLogger,
+                                  fp_breakdown_totals: Dict[int, Dict[str, dict]]) -> None:
+        table = PrettyTable()
+        table.field_names = [
+            'Pred Class',
+            'Size',
+            'FP total',
+            f'FP on {self._fp_cat_name(self.class0_label)}',
+            f'FP on {self._fp_cat_name(self.class1_label)}',
+            f'FP on {self._fp_cat_name(self.class2_label)}',
+            'FP on ignore',
+            'FP on other',
+            'FP edge-truncated',
+        ]
+
+        for class_label in self.object_eval_class_labels:
+            pred_name = self._class_name_for_label(class_label)
+            for bin_key in ('all', 'le100', 'gt100'):
+                size_name = 'all' if bin_key == 'all' else ('<=100' if bin_key == 'le100' else '>100')
+                fp_bin = fp_breakdown_totals[class_label][bin_key]
+                dom = fp_bin['dominant_counts']
+                fp_total = int(
+                    dom[self._fp_cat_name(self.class0_label)] +
+                    dom[self._fp_cat_name(self.class1_label)] +
+                    dom[self._fp_cat_name(self.class2_label)] +
+                    dom['ignore'] + dom['other'])
+                table.add_row([
+                    pred_name,
+                    size_name,
+                    fp_total,
+                    int(dom[self._fp_cat_name(self.class0_label)]),
+                    int(dom[self._fp_cat_name(self.class1_label)]),
+                    int(dom[self._fp_cat_name(self.class2_label)]),
+                    int(dom['ignore']),
+                    int(dom['other']),
+                    int(fp_bin['edge_fp']),
+                ])
+
+        print_log('FP breakdown by GT source and edge truncation:', logger=logger)
+        print_log('\n' + table.get_string(), logger=logger)
 
     def _resolve_instance_map_path(self, data_sample: dict) -> str:
-        if 'instance_map_path' in data_sample:
-            return data_sample['instance_map_path']
+        direct_path = data_sample.get('instance_map_path', None)
+        if direct_path is None and hasattr(data_sample, 'metainfo'):
+            direct_path = data_sample.metainfo.get('instance_map_path', None)
+        if direct_path is not None:
+            return direct_path
 
         seg_map_path = data_sample.get('seg_map_path', None)
         if seg_map_path is None and hasattr(data_sample, 'metainfo'):
             seg_map_path = data_sample.metainfo.get('seg_map_path', None)
-
-        inst_map_path = data_sample.get('instance_map_path', None)
-        if inst_map_path is None and hasattr(data_sample, 'metainfo'):
-            inst_map_path = data_sample.metainfo.get('instance_map_path', None)
-        if inst_map_path is not None:
-            return inst_map_path
 
         if self.instance_map_path is not None:
             img_path = data_sample.get('img_path', None)
@@ -517,21 +1099,31 @@ class InstanceDetectionMetric(BaseMetric):
                 img_path = data_sample.metainfo.get('img_path', None)
             if img_path is not None:
                 stem = osp.splitext(osp.basename(img_path))[0]
-                if self.instance_map_suffix is not None:
-                    return osp.join(self.instance_map_path, stem + self.instance_map_suffix)
-                for suffix in self.auto_instance_suffixes:
-                    candidate = osp.join(self.instance_map_path, stem + suffix)
-                    if osp.exists(candidate):
-                        return candidate
+                return osp.join(self.instance_map_path, stem + self.instance_map_suffix)
 
         if seg_map_path is not None:
-            guessed_file = self._guess_from_seg_map_path(seg_map_path)
-            if guessed_file is not None:
-                return guessed_file
+            candidate = self._guess_from_seg_map_path(seg_map_path)
+            if candidate is not None:
+                return candidate
 
         raise KeyError(
-            'Cannot resolve instance_map_path. Add `instance_map_path` into '
-            'PackSegInputs meta_keys or set metric.instance_map_path.')
+            'Cannot resolve instance_map_path. Add instance_map_path in '
+            'metainfo or set metric.instance_map_path.')
+
+    def _guess_from_seg_map_path(self, seg_map_path: str) -> Optional[str]:
+        seg_no_ext = osp.splitext(seg_map_path)[0]
+        candidates = []
+        for subdir in self.instance_map_subdirs:
+            candidates.append(
+                seg_no_ext.replace('/semantics/', f'/{subdir}/') +
+                self.instance_map_suffix)
+
+        for candidate in candidates:
+            if osp.exists(candidate):
+                return candidate
+        if len(candidates) > 0:
+            return candidates[-1]
+        return None
 
     def _load_instance_map(self, instance_map_file: str) -> np.ndarray:
         if not osp.exists(instance_map_file):
@@ -560,30 +1152,18 @@ class InstanceDetectionMetric(BaseMetric):
                 f'for {instance_map_file}.')
         return instance_map
 
-    def _guess_from_seg_map_path(self, seg_map_path: str) -> Optional[str]:
-        seg_no_ext = osp.splitext(seg_map_path)[0]
-
-        if self.instance_map_suffix is not None:
-            candidates = []
-            for subdir in self.instance_map_subdirs:
-                candidates.append(
-                    seg_no_ext.replace('/semantics/', f'/{subdir}/')
-                    + self.instance_map_suffix)
-            for candidate in candidates:
-                if osp.exists(candidate):
-                    return candidate
-            return candidates[-1]
-
-        candidates = []
-        for suffix in self.auto_instance_suffixes:
-            for subdir in self.instance_map_subdirs:
-                candidates.append(
-                    seg_no_ext.replace('/semantics/', f'/{subdir}/') + suffix)
-
-        for candidate in candidates:
-            if osp.exists(candidate):
-                return candidate
-        return None
+    def _semantic_to_instance_map(self, gt_label: np.ndarray) -> np.ndarray:
+        """Create pseudo instance map from GT weed connected-components."""
+        inst = np.zeros(gt_label.shape, dtype=np.int64)
+        weed_mask = gt_label == self.weed_label
+        labeled, n = sp_ndimage.label(weed_mask)
+        if n <= 0:
+            return inst
+        for comp_id in range(1, n + 1):
+            comp_mask = labeled == comp_id
+            if comp_mask.any():
+                inst[comp_mask] = comp_id
+        return inst
 
     @staticmethod
     def _resize_instance_map_nearest(instance_map: np.ndarray,
@@ -600,77 +1180,16 @@ class InstanceDetectionMetric(BaseMetric):
         return instance_map[y_idx[:, None], x_idx[None, :]].astype(np.int64)
 
     @staticmethod
-    def _resize_rgb_nearest(rgb_image: np.ndarray,
-                            target_shape: Tuple[int, int]) -> np.ndarray:
-        dst_h, dst_w = target_shape
-        pil_img = Image.fromarray(rgb_image)
-        pil_img = pil_img.resize((dst_w, dst_h), resample=Image.BILINEAR)
-        return np.array(pil_img, dtype=np.uint8)
-
-    def _area_to_bin(self, area: int) -> str:
-        for area_bin in self.area_bins:
-            left, right = area_bin
-            if right is None:
-                if area >= left:
-                    return self._bin_name(area_bin)
-            elif left <= area < right:
-                return self._bin_name(area_bin)
-        return self._bin_name(self.area_bins[-1])
-
-    @staticmethod
-    def _bin_name(area_bin: Tuple[int, Optional[int]]) -> str:
-        left, right = area_bin
-        if right is None:
-            return f'{left}_inf'
-        return f'{left}_{right}'
-
-    @staticmethod
-    def _safe_ratio(numerator: int, denominator: int) -> float:
-        if denominator == 0:
+    def _safe_div(num: float, den: float) -> float:
+        if den <= 0:
             return float('nan')
-        return numerator / denominator
+        return float(num) / float(den)
 
-    def _log_summary_tables(self,
-                            logger: MMLogger,
-                            class_totals: Dict[str, int],
-                            class_detected: Dict[str, int],
-                            bin_totals: OrderedDict,
-                            bin_detected: OrderedDict,
-                            cls_bin_totals: Dict[str, OrderedDict],
-                            cls_bin_detected: Dict[str, OrderedDict]) -> None:
-        class_table = PrettyTable()
-        class_table.field_names = ['Class', 'Detected', 'Total', 'DetAcc (%)']
-        for class_name in ('crop', 'weed'):
-            det = class_detected[class_name]
-            tot = class_totals[class_name]
-            acc = self._safe_ratio(det, tot) * 100.0
-            class_table.add_row([class_name, det, tot, np.round(acc, 2)])
-
-        total_det = class_detected['crop'] + class_detected['weed']
-        total_tot = class_totals['crop'] + class_totals['weed']
-        total_acc = self._safe_ratio(total_det, total_tot) * 100.0
-        class_table.add_row(['overall', total_det, total_tot, np.round(total_acc, 2)])
-
-        bin_table = PrettyTable()
-        bin_table.field_names = ['Area Bin (px)', 'Detected', 'Total', 'DetAcc (%)']
-        for bin_name in bin_totals:
-            det = bin_detected[bin_name]
-            tot = bin_totals[bin_name]
-            acc = self._safe_ratio(det, tot) * 100.0
-            bin_table.add_row([bin_name, det, tot, np.round(acc, 2)])
-
-        class_bin_table = PrettyTable()
-        class_bin_table.field_names = ['Class', 'Area Bin (px)', 'Detected', 'Total', 'DetAcc (%)']
-        for class_name in ('crop', 'weed'):
-            for bin_name in cls_bin_totals[class_name]:
-                det = cls_bin_detected[class_name][bin_name]
-                tot = cls_bin_totals[class_name][bin_name]
-                acc = self._safe_ratio(det, tot) * 100.0
-                class_bin_table.add_row([class_name, bin_name, det, tot, np.round(acc, 2)])
-
-        print_log('instance detection class summary:', logger=logger)
-        print_log('\n' + class_table.get_string(), logger=logger)
-        print_log('instance detection area-bin summary:', logger=logger)
-        print_log('\n' + bin_table.get_string(), logger=logger)
-        print_log('instance detection class x area-bin summary:', logger=logger)
-        print_log('\n' + class_bin_table.get_string(), logger=logger)
+    @staticmethod
+    def _f1(precision: float, recall: float) -> float:
+        if np.isnan(precision) or np.isnan(recall):
+            return float('nan')
+        den = precision + recall
+        if den <= 0:
+            return float('nan')
+        return 2.0 * precision * recall / den

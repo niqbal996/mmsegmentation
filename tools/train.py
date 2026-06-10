@@ -66,6 +66,9 @@ def main():
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
 
+    # Keep MMEngine output minimal: only ERROR logs.
+    # cfg.log_level = 'ERROR'
+
     # work_dir is determined in this priority: CLI > segment in file > filename
     if args.work_dir is not None:
         # update configs according to CLI args if args.work_dir is not None

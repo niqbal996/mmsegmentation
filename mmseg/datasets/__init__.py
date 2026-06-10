@@ -31,8 +31,10 @@ from .phenobench_dataset import (PhenobenchDataset, PhenobenchDatasetAL,
                                  PhenobenchDatasetCopyPasteWeed,
                                  PhenobenchDatasetRegionBased)
 from .cropandweed_dataset import CropAndWeedDataset
-from .syclops_dataset import (SyclopsDataset, SyclopsDatasetCS,
-                              SyclopsDatasetDilatedWeedInstances)
+from .syclops_dataset import (
+    SyclopsDataset, SyclopsDatasetCS, SyclopsDatasetDilatedWeedInstances,
+    SugarBeetSynthetic2026Dataset, SugarBeetSynthetic2026DatasetCS,
+    SugarBeetSynthetic2026DatasetDilatedWeedInstances)
 from .weeds_galore import WeedsGalore
 # yapf: disable
 from .transforms import (CLAHE, AdjustGamma, Albu, BioMedical3DPad,
@@ -71,6 +73,8 @@ __all__ = [
     'NYUDataset', 'HSIDrive20Dataset',
     'CropAndWeedDataset', 'PhenobenchDatasetRegionBased',
     'SyclopsDataset', 'SyclopsDatasetCS', 'SyclopsDatasetDilatedWeedInstances',
+    'SugarBeetSynthetic2026Dataset', 'SugarBeetSynthetic2026DatasetCS',
+    'SugarBeetSynthetic2026DatasetDilatedWeedInstances',
     'PhenobenchDataset', 'PhenobenchDatasetAL', 'PhenobenchDatasetCopyPasteWeed',
     'CombinedDataset',
     'ActiveMixerDataset', 'WeedsGalore'

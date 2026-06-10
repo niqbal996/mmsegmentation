@@ -2,6 +2,7 @@
 import argparse
 import os
 import os.path as osp
+import warnings
 
 from mmengine.config import Config, DictAction
 from mmengine.runner import Runner
@@ -40,6 +41,14 @@ def parse_args():
         'It also allows nested list/tuple values, e.g. key="[(a,b),(c,d)]" '
         'Note that the quotation marks are necessary and that no white space '
         'is allowed.')
+    parser.add_argument(
+        '--log-level',
+        choices=['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'],
+        help='override config log level')
+    parser.add_argument(
+        '--quiet',
+        action='store_true',
+        help='suppress most mmengine logs and Python warnings')
     parser.add_argument(
         '--launcher',
         choices=['none', 'pytorch', 'slurm', 'mpi'],
@@ -87,6 +96,12 @@ def main():
     cfg.launcher = args.launcher
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
+
+    if args.quiet:
+        warnings.filterwarnings('ignore')
+        cfg.log_level = 'ERROR'
+    elif args.log_level is not None:
+        cfg.log_level = args.log_level
 
     # work_dir is determined in this priority: CLI > segment in file > filename
     if args.work_dir is not None:

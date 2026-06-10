@@ -1,10 +1,8 @@
 # dataset settings
 import os
-dataset_type_train = 'SyclopsDataset'
-dataset_type_val = 'PhenobenchDataset'
+dataset_type = 'SugarBeetSynthetic2026Dataset'
 
-data_root_train = '/netscratch/naeem/sugarbeet_syn_v6/'
-data_root_val = '/netscratch/naeem/phenobench'
+data_root = '/netscratch/naeem/sugarbeet_syn_v6/'
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('background', 'crop', 'weed'),
@@ -30,13 +28,13 @@ test_pipeline = [
 ]
 
 train_dataloader = dict(
-    batch_size=8,
-    num_workers=4,
+    batch_size=4,
+    num_workers=2,
     persistent_workers=True,
     sampler=dict(type='InfiniteSampler', shuffle=True),
     dataset=dict(
-        type=dataset_type_train,
-        data_root=data_root_train,
+        type=dataset_type,
+        data_root=data_root,
         metainfo=dataset_meta,
         # subset_ratio=dataset_meta['subset_ratio'],
         # seed=dataset_meta['seed'],
@@ -46,20 +44,33 @@ train_dataloader = dict(
         pipeline=train_pipeline))
 
 val_dataloader = dict(
-    batch_size=6,
-    num_workers=4,
+    batch_size=2,
+    num_workers=1,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
-        type=dataset_type_val,
-        data_root=data_root_val,
+        type=dataset_type,
+        data_root=data_root,
         metainfo=dataset_meta,
         data_prefix=dict(
-            img_path='val/images',
-            seg_map_path='val/semantics'),
+            img_path='images/val',
+            seg_map_path='main_camera_annotations/semantics/val'),
         pipeline=test_pipeline))
 
 test_dataloader = val_dataloader
 
-val_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'])
+val_evaluator = [
+    dict(type='IoUMetric', iou_metrics=['mIoU']),
+    # dict(
+    #     type='InstanceDetectionMetric',
+    #     overlap_thr=0.05,
+    #     overlap_mode='gt',
+    #     crop_label=1,
+    #     weed_label=2,
+    #     instance_map_suffix='.npz',
+    #     vis_output_dir='/path/to/mmseg_output/eccv_results/instance_detection_vis',
+    #     vis_area_bins=['100_200'],
+    #     vis_class='weed',
+    #     show_pred_for_detected_only=True)
+]
 test_evaluator = val_evaluator
