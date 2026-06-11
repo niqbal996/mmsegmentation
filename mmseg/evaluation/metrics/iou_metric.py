@@ -158,6 +158,13 @@ class IoUMetric(BaseMetric):
         print_log('per class results:', logger)
         print_log('\n' + class_table_data.get_string(), logger=logger)
 
+        # Expose per-class metrics so checkpoint hooks can use them (e.g. save_best='IoU_weed')
+        for metric_key, metric_values in ret_metrics_class.items():
+            if metric_key != 'Class':
+                for i, class_name in enumerate(class_names):
+                    metrics[f'{metric_key}_{class_name}'] = float(
+                        metric_values[i])
+
         return metrics
 
     @staticmethod
