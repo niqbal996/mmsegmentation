@@ -68,7 +68,18 @@ fi
 find_best_ckpt() {
   local exp_dir="$1"
 
-  # Priority 1: explicit best_mIoU_iter_*.pth files.
+  # Priority 1: explicit best_IoU_weed_iter_*.pth files.
+  local best_weed_iter_list=()
+  while IFS= read -r p; do
+    best_weed_iter_list+=("$p")
+  done < <(find "$exp_dir" -maxdepth 1 -type f -name 'best_IoU_weed_iter_*.pth' | sort -V)
+
+  if [[ ${#best_weed_iter_list[@]} -gt 0 ]]; then
+    printf '%s\n' "${best_weed_iter_list[-1]}"
+    return 0
+  fi
+
+  # Priority 2: explicit best_mIoU_iter_*.pth files.
   local best_miou_iter_list=()
   while IFS= read -r p; do
     best_miou_iter_list+=("$p")
@@ -80,7 +91,7 @@ find_best_ckpt() {
     return 0
   fi
 
-  # Priority 2: any best_*.pth fallback.
+  # Priority 3: any best_*.pth fallback.
   local best_list=()
   while IFS= read -r p; do
     best_list+=("$p")
@@ -91,13 +102,13 @@ find_best_ckpt() {
     return 0
   fi
 
-  # Priority 3: latest.pth
+  # Priority 4: latest.pth
   if [[ -f "$exp_dir/latest.pth" ]]; then
     printf '%s\n' "$exp_dir/latest.pth"
     return 0
   fi
 
-  # Priority 4: highest iter_*.pth
+  # Priority 5: highest iter_*.pth
   local iter_list=()
   while IFS= read -r p; do
     iter_list+=("$p")

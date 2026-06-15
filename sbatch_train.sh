@@ -37,7 +37,7 @@ echo "✅ Output will be saved to: $WORK_DIR"
 
 srun \
   --container-mounts=/netscratch/naeem:/netscratch/naeem,/home/iqbal/mmsegmentation:/home/iqbal/mmsegmentation,/ds/images/cropandweed:/ds/images/cropandweed,/home/iqbal/mmengine:/home/iqbal/mmengine,/home/iqbal/mmdetection:/home/iqbal/mmdetection \
-  --container-image=/netscratch/naeem/mmseg_23.09_09_2025_ADA.sqsh  \
+  --container-image=/netscratch/naeem/mmseg_23.09_09_2025_ADA.sqsh \
   --container-workdir=/home/iqbal/mmsegmentation \
   --time=00-18:00 \
   bash -c "source ~/miniconda3/bin/activate && conda activate mmseg && python3 tools/train.py ${CONFIG_FILE} --work-dir ${WORK_DIR} --eval-after-training"

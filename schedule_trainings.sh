@@ -11,27 +11,37 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 CONFIG_DIR="configs/wacv"
 OUTPUT_ROOT="/netscratch/naeem/mmseg_output/wacv_results"
+declare -a MIXED_REAL_SUBSET_RATIOS=(0.01 0.05 0.10)
 
 # Provide only config filenames (or relative paths if you want to override).
 declare -a CONFIG_FILES=(
-    "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench.py"
-    "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench_ohem_loss.py"
-    "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026.py"
-    "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026_ohem_loss.py"
-    "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
-    "fcn_hr18_1xb4-30k_1024x1024_phenobench"
-    "fcn_hr18_1xb4-30k_1024x1024_phenobench_ohem_loss.py"
-    "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026.py"
-    "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
-    "segformer_mit-b2_1xb2-30k_1024x1024_phenobench_vanilla.py"
-    "segformer_mit-b2_1xb2-30k_1024x1024_phenobench_ohem_loss.py"
-    "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_vanilla.py"
-    "mask2former_r50_1024x1024_phenobench.py"
-    "mask2former_r50_1024x1024_sugarbeetsynthetic2026.py"
-    "mask2former_r50_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
-    "mask2former_swin-t_1024x1024_phenobench.py"
-    "mask2former_swin-t_1024x1024_sugarbeetsynthetic2026.py"
+    # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench.py"
+    # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench_ohem_loss.py"
+    # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026.py"
+    # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026_ohem_loss.py"
+    # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
+    "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss.py"
+    "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss_mixed.py"
+    # "fcn_hr18_1xb4-30k_1024x1024_phenobench.py"
+    # "fcn_hr18_1xb4-30k_1024x1024_phenobench_ohem_loss.py"
+    # "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026.py"
+    # "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
+    "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss.py"
+    "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss_mixed.py"
+    # "segformer_mit-b2_1xb2-30k_1024x1024_phenobench_vanilla.py"
+    # "segformer_mit-b2_1xb2-30k_1024x1024_phenobench_ohem_loss.py"
+    # "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_vanilla.py"
+    # "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
+    "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss.py"
+    "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss_mixed.py"
+    # "mask2former_r50_1024x1024_phenobench.py"
+    # "mask2former_r50_1024x1024_sugarbeetsynthetic2026.py"
+    # "mask2former_r50_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
+    "mask2former_r50_1024x1024_sugarbeetsynthetic2026_and_phenobench_mixed.py"
+    # "mask2former_swin-t_1024x1024_phenobench.py"
+    # "mask2former_swin-t_1024x1024_sugarbeetsynthetic2026.py"
     "mask2former_swin-t_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
+    "mask2former_swin-t_1024x1024_sugarbeetsynthetic2026_and_phenobench_mixed.py"
 )
 
 MODE="submit"
@@ -169,6 +179,31 @@ build_work_dir_name() {
     fi
 }
 
+is_mixed_config() {
+    local config_file="$1"
+    config_file="$(normalize_config_name "$config_file")"
+
+    local filename="${config_file##*/}"
+    local stem="${filename%.py}"
+
+    [[ "$stem" == *_mixed ]]
+}
+
+real_subset_ratio_suffix() {
+    local ratio="$1"
+
+    case "$ratio" in
+        0.01|.01) echo "real1pct" ;;
+        0.05|.05) echo "real5pct" ;;
+        0.10|0.1|.10|.1) echo "real10pct" ;;
+        *)
+            local sanitized="${ratio//./p}"
+            sanitized="${sanitized//[^[:alnum:]_]/_}"
+            echo "real${sanitized}"
+            ;;
+    esac
+}
+
 if [[ ${#CONFIG_FILES[@]} -eq 0 ]]; then
     echo "No configs found in CONFIG_FILES." >&2
     exit 1
@@ -178,8 +213,7 @@ scheduled_count=0
 skipped_count=0
 for config_item in "${CONFIG_FILES[@]}"; do
     config_path="$(resolve_config_path "$config_item")"
-    work_dir_name="$(build_work_dir_name "$config_item")"
-    work_dir="${OUTPUT_ROOT%/}/${work_dir_name}/"
+    base_work_dir_name="$(build_work_dir_name "$config_item")"
 
     if [[ ! -f "$config_path" ]]; then
         echo "[WARN] Config does not exist, skipping: $config_path" >&2
@@ -187,23 +221,47 @@ for config_item in "${CONFIG_FILES[@]}"; do
         continue
     fi
 
-    if [[ "$MODE" == "print-trainings" ]]; then
-        echo "${config_path};${work_dir}"
+    declare -a real_subset_ratios=("")
+    if is_mixed_config "$config_item"; then
+        real_subset_ratios=("${MIXED_REAL_SUBSET_RATIOS[@]}")
+    fi
+
+    for real_subset_ratio in "${real_subset_ratios[@]}"; do
+        work_dir_name="$base_work_dir_name"
+        if [[ -n "$real_subset_ratio" ]]; then
+            work_dir_name="${work_dir_name}_$(real_subset_ratio_suffix "$real_subset_ratio")"
+        fi
+        work_dir="${OUTPUT_ROOT%/}/${work_dir_name}/"
+
+        if [[ "$MODE" == "print-trainings" ]]; then
+            echo "${config_path};${work_dir}"
+            scheduled_count=$((scheduled_count + 1))
+            continue
+        fi
+
+        echo "Scheduling training for config: $config_path"
+        if [[ -n "$real_subset_ratio" ]]; then
+            echo "REAL_SUBSET_RATIO: $real_subset_ratio"
+        fi
+        echo "Output directory: $work_dir"
+
+        if [[ "$MODE" == "dry-run" ]]; then
+            if [[ -n "$real_subset_ratio" ]]; then
+                echo "[DRY-RUN] sbatch --export=ALL,REAL_SUBSET_RATIO=\"$real_subset_ratio\" sbatch_train.sh \"$config_path\" \"$work_dir\""
+            else
+                echo "[DRY-RUN] sbatch sbatch_train.sh \"$config_path\" \"$work_dir\""
+            fi
+        else
+            if [[ -n "$real_subset_ratio" ]]; then
+                sbatch --export="ALL,REAL_SUBSET_RATIO=${real_subset_ratio}" sbatch_train.sh "$config_path" "$work_dir"
+            else
+                sbatch sbatch_train.sh "$config_path" "$work_dir"
+            fi
+        fi
+
         scheduled_count=$((scheduled_count + 1))
-        continue
-    fi
-
-    echo "Scheduling training for config: $config_path"
-    echo "Output directory: $work_dir"
-
-    if [[ "$MODE" == "dry-run" ]]; then
-        echo "[DRY-RUN] sbatch sbatch_train.sh \"$config_path\" \"$work_dir\""
-    else
-        sbatch sbatch_train.sh "$config_path" "$work_dir"
-    fi
-
-    scheduled_count=$((scheduled_count + 1))
-    echo "--------------------------------------------------"
+        echo "--------------------------------------------------"
+    done
 done
 
 if [[ "$MODE" == "print-trainings" ]]; then
