@@ -7,6 +7,7 @@ subfolder, and saves a consolidated summary json across all experiments.
 """
 
 import argparse
+import copy
 import datetime as dt
 import json
 import logging
@@ -43,8 +44,30 @@ def parse_args() -> argparse.Namespace:
         help='Path to schedule_trainings.sh')
     parser.add_argument(
         '--metrics-subdir',
-        default='metrics_reports',
-        help='Subdirectory created inside each work_dir for numbered metric jsons')
+        default=None,
+        help=(
+            'Subdirectory created inside each work_dir for numbered metric '
+            'jsons. Defaults to metrics_reports, or to a target-specific name '
+            'such as phenobench_val_metrics when --eval-config is used.'))
+    parser.add_argument(
+        '--eval-config',
+        default=None,
+        help=(
+            'Optional target config whose dataloader/evaluator split is used '
+            'for every scheduled model. The scheduled config is still used for '
+            'the model architecture and checkpoint compatibility.'))
+    parser.add_argument(
+        '--eval-split',
+        choices=['val', 'test'],
+        default='val',
+        help='Split copied from --eval-config for evaluation.')
+    parser.add_argument(
+        '--runner-work-subdir',
+        default=None,
+        help=(
+            'Subdirectory under each work_dir used as Runner work_dir. By '
+            'default this is the same as --metrics-subdir when --eval-config '
+            'is set, otherwise the original work_dir is used.'))
     parser.add_argument(
         '--summary-output',
         default='metrics_sweep_summary.json',
@@ -80,6 +103,28 @@ def parse_args() -> argparse.Namespace:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
 
     return args
+
+
+def infer_eval_dataset_name(config_path: str) -> str:
+    stem = osp.splitext(osp.basename(config_path))[0].lower()
+
+    if 'sugarbeetsynthetic2026' in stem and 'phenobench' in stem:
+        return 'sugarbeetsynthetic2026_2phenobench'
+    if 'sugarbeetsynthetic2026' in stem or 'syclops' in stem:
+        return 'sugarbeetsynthetic2026'
+    if 'phenobench' in stem:
+        return 'phenobench'
+
+    return re.sub(r'[^a-z0-9]+', '_', stem).strip('_') or 'target'
+
+
+def default_metrics_subdir(args: argparse.Namespace) -> str:
+    if args.metrics_subdir:
+        return args.metrics_subdir
+    if args.eval_config:
+        dataset_name = infer_eval_dataset_name(args.eval_config)
+        return f'{dataset_name}_{args.eval_split}_metrics'
+    return 'metrics_reports'
 
 
 def normalize_path(path: str, base_dir: str) -> str:
@@ -194,6 +239,30 @@ def trigger_tta(cfg: Config) -> None:
     cfg.test_dataloader.dataset.pipeline = cfg.tta_pipeline
     cfg.tta_model.module = cfg.model
     cfg.model = cfg.tta_model
+
+
+def copy_eval_split(cfg: Config, eval_cfg: Config, split: str) -> None:
+    dataloader_key = f'{split}_dataloader'
+    evaluator_key = f'{split}_evaluator'
+
+    if dataloader_key not in eval_cfg:
+        raise KeyError(f'{dataloader_key} not found in eval config')
+    if evaluator_key not in eval_cfg:
+        raise KeyError(f'{evaluator_key} not found in eval config')
+
+    cfg.test_dataloader = copy.deepcopy(eval_cfg[dataloader_key])
+    cfg.test_evaluator = copy.deepcopy(eval_cfg[evaluator_key])
+
+
+def set_evaluator_output_dir(evaluator: Any, output_dir: str) -> None:
+    if isinstance(evaluator, dict):
+        evaluator['output_dir'] = output_dir
+        evaluator['keep_results'] = True
+        return
+
+    if isinstance(evaluator, list):
+        for item in evaluator:
+            set_evaluator_output_dir(item, output_dir)
 
 
 def to_builtin_scalar(value: Any) -> Optional[float]:
@@ -507,10 +576,18 @@ def run_single_experiment(config_path: str, work_dir: str,
     cfg = Config.fromfile(config_path)
     # cfg.log_level = 'ERROR'
     cfg.launcher = args.launcher
+
+    if args.eval_cfg is not None:
+        copy_eval_split(cfg, args.eval_cfg, args.eval_split)
+
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
 
-    cfg.work_dir = work_dir
+    runner_work_dir = work_dir
+    if args.runner_work_subdir:
+        runner_work_dir = osp.join(work_dir, args.runner_work_subdir)
+
+    cfg.work_dir = runner_work_dir
     cfg.load_from = best_ckpt
 
     if args.tta:
@@ -518,10 +595,9 @@ def run_single_experiment(config_path: str, work_dir: str,
 
     if args.out is not None:
         exp_out_dir = osp.join(args.out, experiment_name)
-        cfg.test_evaluator['output_dir'] = exp_out_dir
-        cfg.test_evaluator['keep_results'] = True
+        set_evaluator_output_dir(cfg.test_evaluator, exp_out_dir)
 
-    before_dirs = set(list_timestamp_dirs(work_dir))
+    before_dirs = set(list_timestamp_dirs(runner_work_dir))
 
     runner = Runner.from_cfg(cfg)
 
@@ -529,13 +605,13 @@ def run_single_experiment(config_path: str, work_dir: str,
     metrics_obj = runner.test()
     elapsed = time.perf_counter() - start
 
-    after_dirs = set(list_timestamp_dirs(work_dir))
+    after_dirs = set(list_timestamp_dirs(runner_work_dir))
     new_dirs = sorted(after_dirs - before_dirs)
 
     if new_dirs:
         test_dir = new_dirs[-1]
     else:
-        test_dir = latest_timestamp_dir(work_dir)
+        test_dir = latest_timestamp_dir(runner_work_dir)
 
     metrics = normalize_metrics_dict(metrics_obj)
     if not metrics:
@@ -557,19 +633,31 @@ def run_single_experiment(config_path: str, work_dir: str,
         'experiment_name': experiment_name,
         'config': config_path,
         'work_dir': work_dir,
+        'runner_work_dir': runner_work_dir,
         'best_checkpoint': best_ckpt,
         'test_run_dir': test_dir,
         'created_at': dt.datetime.now().isoformat(timespec='seconds'),
         'metrics': metrics,
     }
+    if args.eval_config_path is not None:
+        metrics_payload.update({
+            'eval_config': args.eval_config_path,
+            'eval_split': args.eval_split,
+        })
     write_json(metrics_path, metrics_payload)
 
     result.update({
         'status': 'success',
+        'runner_work_dir': runner_work_dir,
         'test_run_dir': test_dir,
         'metrics_file': metrics_path,
         'metrics': metrics,
     })
+    if args.eval_config_path is not None:
+        result.update({
+            'eval_config': args.eval_config_path,
+            'eval_split': args.eval_split,
+        })
     return result
 
 
@@ -585,6 +673,18 @@ def unique_experiment_key(name: str, counts: Dict[str, int]) -> str:
 def main() -> None:
     args = parse_args()
     schedule_file = osp.abspath(args.schedule_file)
+    args.metrics_subdir = default_metrics_subdir(args)
+    args.eval_cfg = None
+    args.eval_config_path = None
+
+    if args.eval_config is not None:
+        args.eval_config_path = osp.abspath(args.eval_config)
+        if not osp.isfile(args.eval_config_path):
+            raise FileNotFoundError(
+                f'Eval config file not found: {args.eval_config_path}')
+        args.eval_cfg = Config.fromfile(args.eval_config_path)
+        if args.runner_work_subdir is None:
+            args.runner_work_subdir = args.metrics_subdir
 
     entries = parse_schedule_file(schedule_file)
     if not entries:
@@ -592,6 +692,14 @@ def main() -> None:
             f'No active training entries found in schedule file: {schedule_file}')
 
     print(f'Loaded {len(entries)} experiment(s) from {schedule_file}')
+    if args.eval_config_path is not None:
+        print(f'Using {args.eval_split} split from eval config:')
+        print(f'  {args.eval_config_path}')
+        print(f'Writing metrics under each work_dir subfolder:')
+        print(f'  {args.metrics_subdir}')
+        if args.runner_work_subdir:
+            print(f'Using Runner work_dir subfolder:')
+            print(f'  {args.runner_work_subdir}')
 
     all_results: List[Dict[str, Any]] = []
 
@@ -611,6 +719,11 @@ def main() -> None:
                 'status': 'failed',
                 'error': str(exc),
             }
+            if args.eval_config_path is not None:
+                result.update({
+                    'eval_config': args.eval_config_path,
+                    'eval_split': args.eval_split,
+                })
 
         all_results.append(result)
 
@@ -637,6 +750,9 @@ def main() -> None:
         'schedule_file': schedule_file,
         'launcher': args.launcher,
         'metrics_subdir': args.metrics_subdir,
+        'runner_work_subdir': args.runner_work_subdir,
+        'eval_config': args.eval_config_path,
+        'eval_split': args.eval_split if args.eval_config_path else None,
         'total_experiments': len(all_results),
         'successful_experiments': sum(
             1 for item in all_results if item.get('status') == 'success'),

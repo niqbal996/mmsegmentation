@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/fcn_hr18.py', 
-    'datasets/phenobench3.py',
+    'datasets/sugarbeetsynthetic2026_and_phenobench.py',
     '../_base_/default_runtime.py', 
     # '../_base_/schedules/schedule_40k.py'
 ]

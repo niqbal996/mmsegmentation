@@ -1,5 +1,5 @@
 _base_ = [
-    'mask2former_r50_1024x1024_phenobench.py',
+    'mask2former_r50_1024x1024_sugarbeetsynthetic2026_and_phenobench_mixed.py',
 ]
 num_classes = 3
 crop_size = (1024, 1024)
@@ -44,19 +44,6 @@ custom_keys = {
     'query_feat': embed_multi,
     'level_embed': embed_multi
 }
-default_hooks = dict(
-    timer=dict(type='IterTimerHook'),
-    logger=dict(type='LoggerHook', interval=50, log_metric_by_epoch=False),
-    param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(
-        type='CheckpointHook', by_epoch=False, interval=interval,
-        max_keep_ckpts=1,
-        # Track best checkpoint by class-wise IoU for weeds.
-        save_best='IoU_weed',
-        rule='greater'),
-    sampler_seed=dict(type='DistSamplerSeedHook'),
-    visualization=dict(type='SegVisualizationHook')
-)
 custom_keys.update({
     f'backbone.stages.{stage_id}.blocks.{block_id}.norm': backbone_norm_multi
     for stage_id, num_blocks in enumerate(depths)
@@ -69,7 +56,7 @@ custom_keys.update({
 # optimizer
 optim_wrapper = dict(
     paramwise_cfg=dict(custom_keys=custom_keys, norm_decay_mult=0.0))
-
+    
 # training schedule for 160k
 train_cfg = dict(
     type='IterBasedTrainLoop', max_iters=max_iters, val_interval=interval)

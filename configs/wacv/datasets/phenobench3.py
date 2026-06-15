@@ -1,4 +1,3 @@
-import os
 dataset_type = 'PhenobenchDatasetAL'
 data_root = '/netscratch/naeem/phenobench'
 
@@ -6,7 +5,7 @@ data_root = '/netscratch/naeem/phenobench'
 dataset_meta = dict(
     classes=('background', 'crop', 'weed'),
     palette=[[0, 0, 0], [0, 255, 0], [255, 0, 0]],
-    subset_ratio=float(os.environ.get('SUBSET_RATIO', 1.0)),
+    subset_ratio=1.0,
     random_seed=42,
 )
 
@@ -27,6 +26,32 @@ test_pipeline = [
     dict(type='Resize', scale=(1024, 1024), keep_ratio=True),
     dict(type='PackSegInputs')
 ]
+
+semantic_evaluator = dict(
+    type='IoUMetric',
+    iou_metrics=['mIoU'],
+    ignore_index=255,
+    ignore_label_ids=[])
+
+instance_evaluator = dict(
+    type='InstanceDetectionMetric',
+    object_iog_thr=0.05,
+    object_iop_thr=0.05,
+    class0_label=0,
+    class1_label=1,
+    class2_label=2,
+    instance_map_path='/netscratch/naeem/phenobench/val/plant_instances',
+    instance_map_suffix='.png',
+    instance_map_subdirs=('plant_instances', 'instance_segmentation'),
+    # vis_output_dir='/netscratch/naeem/mmseg_output/eccv_results/eccv_table/examples',
+    # vis_fp_case_max=20,
+    # vis_bg_alpha=0.35,
+    pred_island_min_area=10,
+    class_names=('background/soil', 'crop', 'weed'),
+    ignore_index=255,
+    ignore_label_ids=[],
+    allow_semantic_instance_fallback=True,
+    resize_instance_to_gt=True)
 
 train_dataloader = dict(
     batch_size=4,
@@ -69,30 +94,5 @@ test_dataloader = val_dataloader
 #             seg_map_path='test/semantics'),
 #         pipeline=test_pipeline))
 
-val_evaluator = [
-    dict(
-        type='IoUMetric',
-        iou_metrics=['mIoU'],
-        ignore_index=255,
-        ignore_label_ids=[]),
-    # dict(
-    #     type='InstanceDetectionMetric',
-    #     object_iog_thr=0.05,
-    #     object_iop_thr=0.05,
-    #     class0_label=0,
-    #     class1_label=1,
-    #     class2_label=2,
-    #     instance_map_path='/netscratch/naeem/phenobench/val/plant_instances',
-    #     instance_map_suffix='.png',
-    #     instance_map_subdirs=('plant_instances', 'instance_segmentation'),
-    #     # vis_output_dir='/netscratch/naeem/mmseg_output/eccv_results/eccv_table/examples',
-    #     # vis_fp_case_max=20,
-    #     # vis_bg_alpha=0.35,
-    #     pred_island_min_area=10,
-    #     class_names=('background/soil', 'crop', 'weed'),
-    #     ignore_index=255,
-    #     ignore_label_ids=[],
-    #     allow_semantic_instance_fallback=True,
-    #     resize_instance_to_gt=True)
-]
+val_evaluator = [semantic_evaluator, instance_evaluator]
 test_evaluator = val_evaluator

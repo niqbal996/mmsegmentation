@@ -5,7 +5,7 @@ custom_imports = dict(imports='mmdet.models', allow_failed_imports=False)
 num_classes = 3
 crop_size = (1024, 1024)
 max_iters = 30000
-interval = 100
+interval = 1000
 pretrained = 'https://download.openmmlab.com/mmsegmentation/v0.5/pretrain/swin/swin_tiny_patch4_window7_224_20220317-1cdeb081.pth'  # noqa
 depths = [2, 2, 6, 2]
 model = dict(
@@ -58,6 +58,11 @@ custom_keys.update({
 optim_wrapper = dict(
     paramwise_cfg=dict(custom_keys=custom_keys, norm_decay_mult=0.0))
 
+# training schedule for 30k
+train_cfg = dict(
+    type='IterBasedTrainLoop', max_iters=max_iters, val_interval=interval)
+val_cfg = dict(type='ValLoop')
+test_cfg = dict(type='TestLoop')
 default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=50, log_metric_by_epoch=False),

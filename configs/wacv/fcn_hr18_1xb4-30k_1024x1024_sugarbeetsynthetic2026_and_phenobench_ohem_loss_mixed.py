@@ -1,8 +1,7 @@
 _base_ = [
     '../_base_/models/fcn_hr18.py', 
-    'datasets/phenobench3.py',
+    'datasets/combined_sugarbeetsynthetic2026_phenobench_test_real.py',
     '../_base_/default_runtime.py', 
-    # '../_base_/schedules/schedule_40k.py'
 ]
 crop_size = (1024, 1024)
 data_preprocessor = dict(size=crop_size)
