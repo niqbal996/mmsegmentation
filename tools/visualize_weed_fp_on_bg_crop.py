@@ -107,22 +107,118 @@ def _render_pred_mask(pred: np.ndarray, c0: int, c1: int, c2: int) -> np.ndarray
     return rgb
 
 
-def _make_legend_strip(height: int, entries,
-                       swatch: int = 14, gap: int = 6,
-                       pad: int = 10, strip_w: int = 130) -> np.ndarray:
-    """Return a (height, strip_w, 3) uint8 array with a vertical legend."""
+def _compute_exg(rgb: np.ndarray, mask: np.ndarray) -> float:
+    """Mean Excess Green (2G - R - B) for pixels under mask.
+
+    Positive ExG (especially >30) indicates green vegetation.
+    Near-zero or negative values suggest bare soil / background.
+    """
+    if not mask.any():
+        return float('nan')
+    r = rgb[mask, 0].astype(np.float32)
+    g = rgb[mask, 1].astype(np.float32)
+    b = rgb[mask, 2].astype(np.float32)
+    return float((2.0 * g - r - b).mean())
+
+
+def _exg_color(exg: float):
+    """Traffic-light colour for an ExG value."""
+    if np.isnan(exg):      return (100, 100, 100)
+    if exg > 30:           return (60,  210, 60)   # green  — likely vegetation
+    if exg > 10:           return (220, 180, 40)   # yellow — possibly vegetation
+    return                        (130, 130, 130)   # gray   — likely soil/bg
+
+
+def _make_legend_left(height: int, strip_w: int = 118) -> np.ndarray:
+    """Narrow left sidebar with colour legend and ExG traffic-light key."""
     strip = np.full((height, strip_w, 3), 20, dtype=np.uint8)
     pil   = Image.fromarray(strip)
     draw  = ImageDraw.Draw(pil)
-    # Title
-    draw.text((pad, pad), 'Legend', fill=(200, 200, 200))
-    y = pad + 16
-    for label, color in entries:
+    pad, y = 8, 8
+    draw.text((pad, y), 'Legend', fill=(200, 200, 200))
+    y += 14
+    sw, gap = 12, 4
+    for lbl, color in _LEGEND:
         c = tuple(int(v) for v in color)
-        draw.rectangle([(pad, y), (pad + swatch, y + swatch)],
-                       fill=c, outline=(80, 80, 80))
-        draw.text((pad + swatch + 5, y + 1), label, fill=(230, 230, 230))
-        y += swatch + gap
+        draw.rectangle([(pad, y), (pad + sw, y + sw)], fill=c, outline=(60, 60, 60))
+        draw.text((pad + sw + 4, y + 1), lbl, fill=(215, 215, 215))
+        y += sw + gap
+    y += 5
+    draw.line([(pad, y), (strip_w - pad, y)], fill=(55, 55, 55), width=1)
+    y += 7
+    draw.text((pad, y), 'ExG=2G-R-B', fill=(95, 95, 95))
+    y += 12
+    for dot_c, label in [
+            ((60,  210, 60),  '>30  veg'),
+            ((220, 180, 40),  '>10  maybe'),
+            ((130, 130, 130), 'else  soil'),
+    ]:
+        draw.ellipse([(pad, y + 1), (pad + 8, y + 9)],
+                     fill=dot_c, outline=(50, 50, 50))
+        draw.text((pad + 11, y), label, fill=(160, 160, 160))
+        y += 12
+    return np.asarray(pil, dtype=np.uint8)
+
+
+def _make_info_strip(height: int,
+                     components: list, fn_masks: list,
+                     rgb_panel: np.ndarray,
+                     model_name: str = '',
+                     cy1: int = 0, cx1: int = 0,
+                     cy2: Optional[int] = None, cx2: Optional[int] = None,
+                     strip_w: int = 170) -> np.ndarray:
+    """Per-row right sidebar: model header + instances visible in the crop region.
+
+    cy1/cx1/cy2/cx2: crop bounds on the full-image masks.  Pass None to show all.
+    """
+    strip = np.full((height, strip_w, 3), 20, dtype=np.uint8)
+    pil   = Image.fromarray(strip)
+    draw  = ImageDraw.Draw(pil)
+    pad, y = 8, 8
+
+    if model_name:
+        draw.text((pad, y), model_name, fill=(170, 195, 220))
+        y += 14
+        draw.line([(pad, y), (strip_w - pad, y)], fill=(55, 55, 55), width=1)
+        y += 6
+
+    def _in_crop(mask: np.ndarray) -> bool:
+        if cy2 is None or cx2 is None:
+            return True
+        return bool(mask[cy1:cy2, cx1:cx2].any())
+
+    for i, rec in enumerate(components, 1):
+        if y + 12 > height:
+            break
+        if not (rec['is_tp'] or rec['is_fp']):
+            continue
+        if not _in_crop(rec['mask']):
+            continue
+        cat_s = {'tp_weed': 'TP', 'fp_bg': 'FP-bg', 'fp_crop': 'FP-cr'}.get(
+            rec['category'], '?')
+        if rec['is_fp'] and rec['category'] == 'fp_bg':
+            exg   = _compute_exg(rgb_panel, rec['mask'])
+            dot_c = _exg_color(exg)
+            draw.ellipse([(pad, y + 2), (pad + 8, y + 10)],
+                         fill=dot_c, outline=(50, 50, 50))
+            draw.text((pad + 11, y),
+                      f'#{i} {cat_s}  A={rec["area"]}  {exg:+.0f}',
+                      fill=(210, 210, 210))
+        else:
+            draw.text((pad, y),
+                      f'#{i} {cat_s}  A={rec["area"]}',
+                      fill=(195, 195, 195))
+        y += 12
+
+    teal = tuple(_PALETTE['fn_weed'].tolist())
+    for i, fn in enumerate(fn_masks, 1):
+        if y + 12 > height:
+            break
+        if not _in_crop(fn['mask']):
+            continue
+        draw.text((pad, y), f'FN#{i}  A={fn["area"]}', fill=teal)
+        y += 12
+
     return np.asarray(pil, dtype=np.uint8)
 
 
@@ -299,44 +395,31 @@ def compose_single_vis(rgb, gt_np, pred_np, analysis, c0, c1, c2,
     draw   = ImageDraw.Draw(pil)
     W      = w * 3
 
-    for x, title in [(0, 'RGB image'), (w, 'GT mask'),
-                     (w * 2, 'Prediction + component labels')]:
-        draw.rectangle([(x, 0), (x + w - 1, 18)], fill=(0, 0, 0))
+    for x, title in [(0, 'RGB'), (w, 'GT mask'), (w * 2, 'Prediction')]:
+        draw.rectangle([(x, 0), (x + w - 1, 14)], fill=(0, 0, 0))
         draw.text((x + 4, 2), title, fill=(255, 255, 255))
-    draw.line([(w, 0), (w, h - 1)],     fill=(200, 200, 200), width=1)
-    draw.line([(w*2, 0), (w*2, h - 1)], fill=(200, 200, 200), width=1)
+    draw.line([(w, 0),   (w,   h - 1)], fill=(160, 160, 160), width=1)
+    draw.line([(w*2, 0), (w*2, h - 1)], fill=(160, 160, 160), width=1)
 
-    for i, rec in enumerate(analysis['components'], 1):
-        if not (rec['is_tp'] or rec['is_fp']):
-            continue
-        ys, xs = np.where(rec['mask'])
-        if ys.size == 0:
-            continue
-        tag = f"#{i} {'TP' if rec['is_tp'] else rec['category'].upper()} A={rec['area']}"
-        _tight_text(draw,
-                    min(int(xs.min()) + w * 2, W - 80),
-                    max(20, int(ys.min()) - 12),
-                    tag, (255, 255, 255), W)
+    _draw_pred_labels(draw, analysis, cy1=0, cx1=0, ch=h, cw=w)
 
-    for i, fn in enumerate(analysis['fn_masks'], 1):
-        ys, xs = np.where(fn['mask'])
-        if ys.size == 0:
-            continue
-        _tight_text(draw,
-                    min(int(xs.min()) + w * 2, W - 80),
-                    max(20, int(ys.min()) - 12),
-                    f"FN#{i} A={fn['area']}",
-                    tuple(_PALETTE['fn_weed'].tolist()), W)
-
-    summary = (f"FP-on-bg: {analysis['fp_bg_count']}  "
-               f"FP-on-crop: {analysis['fp_crop_count']}  "
-               f"FN-weed: {len(analysis['fn_masks'])}  "
-               f"IoP>={iop_thr*100:.1f}%  IoG>={iog_thr*100:.1f}%")
-    draw.rectangle([(0, h - 16), (W - 1, h - 1)], fill=(0, 0, 0))
-    draw.text((4, h - 14), summary, fill=(255, 255, 200))
     panels = np.asarray(pil, dtype=np.uint8)
-    legend = _make_legend_strip(h, _LEGEND)
-    return np.concatenate([panels, legend], axis=1)
+    strip  = _make_info_strip(h, analysis['components'], analysis['fn_masks'], pr)
+
+    panels_with_strip = np.concatenate([panels, strip], axis=1)
+    total_w = panels_with_strip.shape[1]
+
+    fp_bar  = np.zeros((18, total_w, 3), dtype=np.uint8)
+    fp_pil  = Image.fromarray(fp_bar)
+    fp_draw = ImageDraw.Draw(fp_pil)
+    summary = (f"FP-bg:{analysis['fp_bg_count']}  FP-crop:{analysis['fp_crop_count']}  "
+               f"FN:{len(analysis['fn_masks'])}  "
+               f"IoP>={iop_thr*100:.0f}%  IoG>={iog_thr*100:.0f}%")
+    fp_draw.text((4, 3), summary, fill=(255, 255, 200))
+
+    right_block = np.concatenate(
+        [panels_with_strip, np.asarray(fp_pil, dtype=np.uint8)], axis=0)
+    return np.concatenate([_make_legend_left(right_block.shape[0]), right_block], axis=1)
 
 
 # ---------------------------------------------------------------------------
@@ -358,21 +441,36 @@ def _c(arr: np.ndarray, cy1, cx1, cy2, cx2) -> np.ndarray:
     return arr[cy1:cy2, cx1:cx2] if arr.ndim == 2 else arr[cy1:cy2, cx1:cx2, :]
 
 
-def _comp_labels_in_crop(draw, analysis, cy1, cx1, row_offset,
-                          cw, total_w, text_fill=(255, 255, 255)):
-    """Draw tight component labels for components visible inside a crop panel."""
+def _draw_pred_labels(draw: ImageDraw.Draw, analysis: dict,
+                      cy1: int, cx1: int, ch: int, cw: int,
+                      y_offset: int = 0) -> None:
+    """Draw #N / FN#N labels on the prediction panel (3rd column) of a row PIL."""
+    W = cw * 3
     for i, rec in enumerate(analysis['components'], 1):
         if not (rec['is_tp'] or rec['is_fp']):
             continue
         ys, xs = np.where(rec['mask'])
         if ys.size == 0:
             continue
-        if ys.max() < cy1 or ys.min() > (cy1 + draw.im.size[1] // 2 - row_offset):
+        ry_min = int(ys.min()) - cy1
+        ry_max = int(ys.max()) - cy1
+        if ry_max < 0 or ry_min >= ch:
             continue
-        tag = f"#{i} {'TP' if rec['is_tp'] else rec['category'].upper()} A={rec['area']}"
-        ty  = row_offset + max(14, int(ys.min()) - cy1 - 12)
-        tx  = min(int(xs.min()) - cx1 + cw * 2, total_w - 80)
-        _tight_text(draw, tx, ty, tag, text_fill, total_w)
+        ty = y_offset + max(14, ry_min - 10)
+        tx = min(int(xs.min()) - cx1 + cw * 2, W - 25)
+        _tight_text(draw, tx, ty, f'#{i}', (255, 255, 255), W)
+    teal = tuple(_PALETTE['fn_weed'].tolist())
+    for i, fn in enumerate(analysis['fn_masks'], 1):
+        ys, xs = np.where(fn['mask'])
+        if ys.size == 0:
+            continue
+        ry_min = int(ys.min()) - cy1
+        ry_max = int(ys.max()) - cy1
+        if ry_max < 0 or ry_min >= ch:
+            continue
+        ty = y_offset + max(14, ry_min - 10)
+        tx = min(int(xs.min()) - cx1 + cw * 2, W - 30)
+        _tight_text(draw, tx, ty, f'FN#{i}', teal, W)
 
 
 def _mask_iou(m1: np.ndarray, m2: np.ndarray) -> float:
@@ -427,55 +525,55 @@ def compose_comparison_crop(rgb, gt_np, pred1_np, analysis1,
                              c0, c1, c2, ignore_index,
                              name1, name2, fp_inst,
                              iop_thr, iog_thr) -> np.ndarray:
-    """2-row × 3-col crop comparison image."""
+    """2-row × 3-col crop comparison image with per-row info sidebar."""
     pr, pg, pp1 = render_full_panels(rgb, gt_np, pred1_np, analysis1, c0, c1, c2, ignore_index)
     _,   _,  pp2 = render_full_panels(rgb, gt_np, pred2_np, analysis2, c0, c1, c2, ignore_index)
-
-    row1   = np.concatenate([_c(pr, cy1, cx1, cy2, cx2),
-                              _c(pg, cy1, cx1, cy2, cx2),
-                              _c(pp1, cy1, cx1, cy2, cx2)], axis=1)
-    row2   = np.concatenate([_c(pr, cy1, cx1, cy2, cx2),
-                              _c(pg, cy1, cx1, cy2, cx2),
-                              _c(pp2, cy1, cx1, cy2, cx2)], axis=1)
-    canvas = np.concatenate([row1, row2], axis=0)
-
-    pil    = Image.fromarray(canvas)
-    draw   = ImageDraw.Draw(pil)
     cw, ch = cx2 - cx1, cy2 - cy1
-    W      = cw * 3
+    W = cw * 3
 
-    # Dividers
-    for col in (cw, cw * 2):
-        draw.line([(col, 0), (col, ch * 2 - 1)], fill=(160, 160, 160), width=1)
-    draw.line([(0, ch), (W - 1, ch)], fill=(255, 255, 255), width=2)
+    def _build_row(pp, analysis, hdr_text, hdr_color):
+        arr = np.concatenate([_c(pr, cy1, cx1, cy2, cx2),
+                              _c(pg, cy1, cx1, cy2, cx2),
+                              _c(pp, cy1, cx1, cy2, cx2)], axis=1)
+        pil  = Image.fromarray(arr)
+        draw = ImageDraw.Draw(pil)
+        draw.rectangle([(0, 0), (W - 1, 13)], fill=(0, 0, 0))
+        draw.text((4, 2),        'RGB',     fill=(180, 180, 180))
+        draw.text((cw + 4, 2),  'GT mask', fill=(180, 180, 180))
+        draw.text((cw*2 + 4, 2), hdr_text,  fill=hdr_color)
+        for col in (cw, cw * 2):
+            draw.line([(col, 0), (col, ch - 1)], fill=(110, 110, 110), width=1)
+        _draw_pred_labels(draw, analysis, cy1, cx1, ch, cw)
+        return np.asarray(pil, dtype=np.uint8)
 
-    # Row headers
-    draw.rectangle([(0, 0), (W - 1, 13)], fill=(0, 0, 0))
-    draw.text((4, 2),      'RGB',       fill=(200, 200, 200))
-    draw.text((cw + 4, 2), 'GT mask',   fill=(200, 200, 200))
-    draw.text((cw*2 + 4, 2), f'▲ {name1}', fill=(255, 220, 80))
+    row1_panels = _build_row(pp1, analysis1, f'▲ {name1}', (255, 220, 80))
+    row2_panels = _build_row(pp2, analysis2, f'▼ {name2}', (80,  200, 255))
 
-    draw.rectangle([(0, ch), (W - 1, ch + 13)], fill=(0, 0, 0))
-    draw.text((4, ch + 2),      'RGB',      fill=(200, 200, 200))
-    draw.text((cw + 4, ch + 2), 'GT mask',  fill=(200, 200, 200))
-    draw.text((cw*2 + 4, ch + 2), f'▼ {name2}', fill=(80, 200, 255))
+    strip1 = _make_info_strip(ch, analysis1['components'], analysis1['fn_masks'],
+                               pr, model_name=f'▲ {name1}',
+                               cy1=cy1, cx1=cx1, cy2=cy2, cx2=cx2)
+    strip2 = _make_info_strip(ch, analysis2['components'], analysis2['fn_masks'],
+                               pr, model_name=f'▼ {name2}',
+                               cy1=cy1, cx1=cx1, cy2=cy2, cx2=cx2)
 
-    # Component labels per row (only if visible in crop)
-    _comp_labels_in_crop(draw, analysis1, cy1, cx1, row_offset=0,  cw=cw, total_w=W)
-    _comp_labels_in_crop(draw, analysis2, cy1, cx1, row_offset=ch, cw=cw, total_w=W)
+    full_row1 = np.concatenate([row1_panels, strip1], axis=1)
+    full_row2 = np.concatenate([row2_panels, strip2], axis=1)
+    divider   = np.full((2, full_row1.shape[1], 3), 160, dtype=np.uint8)
 
-    # Footer
-    m1 = f'M1 fpbg={analysis1["fp_bg_count"]} fpcrop={analysis1["fp_crop_count"]} fn={len(analysis1["fn_masks"])}'
-    m2 = f'M2 fpbg={analysis2["fp_bg_count"]} fpcrop={analysis2["fp_crop_count"]} fn={len(analysis2["fn_masks"])}'
-    footer = (f'src:{fp_inst["source"]}  cat:{fp_inst["category"]}  '
-              f'a={fp_inst["area"]}  |  {m1}  |  {m2}  |  '
-              f'IoP>={iop_thr*100:.0f}% IoG>={iog_thr*100:.0f}%')
-    draw.rectangle([(0, ch*2 - 15), (W - 1, ch*2 - 1)], fill=(0, 0, 0))
-    draw.text((4, ch*2 - 13), footer, fill=(255, 255, 200))
+    m1 = (f'M1 fpbg={analysis1["fp_bg_count"]} fpcrop={analysis1["fp_crop_count"]}'
+          f' fn={len(analysis1["fn_masks"])}')
+    m2 = (f'M2 fpbg={analysis2["fp_bg_count"]} fpcrop={analysis2["fp_crop_count"]}'
+          f' fn={len(analysis2["fn_masks"])}')
+    footer_txt = (f'src:{fp_inst["source"]}  cat:{fp_inst["category"]}'
+                  f'  a={fp_inst["area"]}  |  {m1}  |  {m2}'
+                  f'  |  IoP>={iop_thr*100:.0f}% IoG>={iog_thr*100:.0f}%')
+    fp_bar  = np.zeros((18, full_row1.shape[1], 3), dtype=np.uint8)
+    fp_pil  = Image.fromarray(fp_bar)
+    ImageDraw.Draw(fp_pil).text((4, 3), footer_txt, fill=(255, 255, 200))
 
-    panels = np.asarray(pil, dtype=np.uint8)
-    legend = _make_legend_strip(ch * 2, _LEGEND)
-    return np.concatenate([panels, legend], axis=1)
+    right_block = np.concatenate(
+        [full_row1, divider, full_row2, np.asarray(fp_pil, dtype=np.uint8)], axis=0)
+    return np.concatenate([_make_legend_left(right_block.shape[0]), right_block], axis=1)
 
 
 # ---------------------------------------------------------------------------
