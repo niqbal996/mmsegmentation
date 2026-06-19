@@ -91,6 +91,12 @@ def parse_args() -> argparse.Namespace:
         help=('If set, predictions are saved for offline evaluation. '
               'Each experiment writes into <out>/<experiment_name>.'))
     parser.add_argument(
+        '--force',
+        action='store_true',
+        help=(
+            'Re-run evaluation even when a metrics json already exists in the '
+            'metrics subdir (default: skip already-evaluated experiments)'))
+    parser.add_argument(
         '--strict',
         action='store_true',
         help='Stop immediately when one experiment fails')
@@ -463,6 +469,25 @@ def extract_classwise_metrics_from_log(test_dir: Optional[str]) -> Dict[str, flo
     return classwise
 
 
+def find_existing_metrics_file(metrics_dir: str) -> Optional[str]:
+    """Return the path to the highest-indexed metrics json in metrics_dir, or None."""
+    if not osp.isdir(metrics_dir):
+        return None
+
+    max_idx = 0
+    best_file: Optional[str] = None
+    for filename in os.listdir(metrics_dir):
+        match = METRICS_FILE_PATTERN.match(filename)
+        if not match:
+            continue
+        idx = int(match.group('idx'))
+        if idx > max_idx:
+            max_idx = idx
+            best_file = osp.join(metrics_dir, filename)
+
+    return best_file
+
+
 def next_metrics_index(metrics_dir: str) -> int:
     if not osp.isdir(metrics_dir):
         return 1
@@ -563,6 +588,34 @@ def run_single_experiment(config_path: str, work_dir: str,
     if not osp.isfile(config_path):
         result['error'] = f'Config file not found: {config_path}'
         return result
+
+    # Resume: if a metrics file already exists and --force was not passed, load
+    # it and return without re-running the evaluation.
+    if not getattr(args, 'force', False):
+        metrics_dir_check = osp.join(work_dir, args.metrics_subdir)
+        existing_file = find_existing_metrics_file(metrics_dir_check)
+        if existing_file is not None:
+            try:
+                payload = try_load_json(existing_file)
+            except OSError:
+                payload = None
+            if payload and isinstance(payload, dict):
+                metrics = payload.get('metrics', {})
+                if metrics:
+                    result.update({
+                        'status': 'success',
+                        'skipped': True,
+                        'runner_work_dir': payload.get('runner_work_dir', work_dir),
+                        'test_run_dir': payload.get('test_run_dir'),
+                        'best_checkpoint': payload.get('best_checkpoint'),
+                        'metrics_file': existing_file,
+                        'metrics': metrics,
+                    })
+                    if 'eval_config' in payload:
+                        result['eval_config'] = payload['eval_config']
+                    if 'eval_split' in payload:
+                        result['eval_split'] = payload['eval_split']
+                    return result
 
     best_ckpt = find_best_checkpoint(work_dir)
     if best_ckpt is None:
@@ -728,9 +781,14 @@ def main() -> None:
         all_results.append(result)
 
         if result['status'] == 'success':
-            print_log(
-                f"Saved metrics for {exp_name}: {result['metrics_file']}",
-                logger='current')
+            if result.get('skipped'):
+                print_log(
+                    f"Skipped (cached) {exp_name}: {result['metrics_file']}",
+                    logger='current')
+            else:
+                print_log(
+                    f"Saved metrics for {exp_name}: {result['metrics_file']}",
+                    logger='current')
         else:
             print_log(
                 f"Failed {exp_name}: {result.get('error', 'Unknown error')}",
@@ -756,6 +814,8 @@ def main() -> None:
         'total_experiments': len(all_results),
         'successful_experiments': sum(
             1 for item in all_results if item.get('status') == 'success'),
+        'skipped_experiments': sum(
+            1 for item in all_results if item.get('skipped')),
         'failed_experiments': sum(
             1 for item in all_results if item.get('status') != 'success'),
         'experiments': experiments_map,

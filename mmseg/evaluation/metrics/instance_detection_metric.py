@@ -76,6 +76,26 @@ class InstanceDetectionMetric(BaseMetric):
             (in pixels) kept for object-level TP/FP accounting. Components
             smaller than this threshold are ignored entirely. Set to 0 to
             disable filtering. Default: 0.
+        exg_unlabelled_thr (float, optional): Excess Green index threshold
+            (ExG = 2G − R − B) used to flag FP-on-background components as
+            "probably unlabelled plants". For each predicted component that is
+            FP on class0 (background/soil), the mean ExG over its pixels is
+            computed from the RGB image. Components exceeding this threshold
+            are counted in a separate "Prob.Unlabelled" column in the summary
+            table. Does not affect any metric values. Set to None to disable.
+            Default: 20.0.
+        audit_thresholds (Sequence[float], optional): When set, a threshold
+            sweep is performed at the end of ``compute_metrics`` without
+            re-running inference. Each value is applied as both the IoG
+            (recall) and IoP (precision) threshold simultaneously. Results
+            are printed as a single table and, if ``audit_figure_path`` is
+            given, as a matplotlib figure. Raw IoG/IoP scores are stored
+            during ``process`` so no extra forward passes are needed.
+            Example: ``[0.01, 0.05, 0.10, 0.20, 0.50, 1.0]``.
+            Default: None (disabled).
+        audit_figure_path (str, optional): File path (e.g. ``audit.png``)
+            where the threshold-sweep precision/recall figure is saved.
+            Requires ``audit_thresholds`` to be set. Default: None.
         collect_device (str): 'cpu' or 'gpu'. Default: 'cpu'.
         prefix (str, optional): Metric name prefix.
     """
@@ -100,6 +120,9 @@ class InstanceDetectionMetric(BaseMetric):
                  vis_fp_case_max: int = 10,
                  vis_bg_alpha: float = 0.35,
                  pred_island_min_area: int = 0,
+                 exg_unlabelled_thr: Optional[float] = 20.0,
+                 audit_thresholds: Optional[Sequence[float]] = None,
+                 audit_figure_path: Optional[str] = None,
                  collect_device: str = 'cpu',
                  prefix: Optional[str] = None,
                  **kwargs) -> None:
@@ -169,8 +192,15 @@ class InstanceDetectionMetric(BaseMetric):
         self.vis_fp_case_max = int(max(0, vis_fp_case_max))
         self.vis_bg_alpha = float(max(0.0, min(1.0, vis_bg_alpha)))
         self.pred_island_min_area = int(max(0, pred_island_min_area))
+        self.exg_unlabelled_thr = (float(exg_unlabelled_thr)
+                                   if exg_unlabelled_thr is not None else None)
         self._vis_fp_candidates: List[dict] = []
         self._vis_case_seq = 0
+        self.audit_thresholds = (
+            sorted(float(t) for t in audit_thresholds)
+            if audit_thresholds is not None else None
+        )
+        self.audit_figure_path = audit_figure_path
         if self.vis_output_dir is not None:
             mkdir_or_exist(self.vis_output_dir)
 
@@ -217,10 +247,19 @@ class InstanceDetectionMetric(BaseMetric):
                 instance_map = self._resize_instance_map_nearest(
                     instance_map, target_shape=gt_np.shape)
 
+            rgb_np = None
+            if self.exg_unlabelled_thr is not None:
+                img_path = self._resolve_img_path(data_sample)
+                if img_path and osp.exists(img_path):
+                    rgb_np = self._load_rgb_image(img_path)
+                    if rgb_np.shape[:2] != gt_np.shape:
+                        rgb_np = self._resize_rgb_nearest(rgb_np, gt_np.shape)
+
             object_stats = self._compute_object_level_stats(
                 pred_label=pred_np,
                 gt_label=gt_np,
-                instance_map=instance_map)
+                instance_map=instance_map,
+                rgb=rgb_np)
             pixel_confusion = self._compute_pixel_confusion_matrix(
                 pred_label=pred_np,
                 gt_label=gt_np)
@@ -312,6 +351,13 @@ class InstanceDetectionMetric(BaseMetric):
         metrics['weed_recall'] = round(weed_recall * 100.0, 2)
         metrics['weed_f1'] = round(weed_f1 * 100.0, 2)
 
+        weed_le100_bucket = object_totals[self.class2_label]['le100']
+        _raw_prec_le100 = self._safe_div(
+            weed_le100_bucket['pixel_inter_sum'],
+            weed_le100_bucket['pixel_area_sum'])
+        metrics['weed_pixel_prec_le100'] = round(
+            float('nan') if np.isnan(_raw_prec_le100) else _raw_prec_le100 * 100.0, 2)
+
         for class_label in self.object_eval_class_labels:
             class_name = self._class_name_for_label(class_label)
             safe_cls = class_name.replace(' ', '_').replace('/', '_')
@@ -344,15 +390,24 @@ class InstanceDetectionMetric(BaseMetric):
                     fp_bin['edge_fp'])
                 for gt_cat_key, gt_count in fp_bin['dominant_counts'].items():
                     metrics[f'{key_prefix}_fp_on_{gt_cat_key}'] = float(gt_count)
+                metrics[f'{key_prefix}_fp_probably_unlabelled'] = float(
+                    fp_bin.get('probably_unlabelled', 0.0))
 
         self._log_object_summary(
             logger=logger,
             object_totals=object_totals,
             pixel_metrics=per_class,
             fp_breakdown_totals=fp_breakdown_totals)
+        self._log_paper_summary(
+            logger=logger,
+            metrics=metrics,
+            n_images=len(results))
         self._dump_top_fp_visualizations(logger=logger)
         self._vis_fp_candidates = []
         self._vis_case_seq = 0
+
+        if self.audit_thresholds is not None:
+            self._run_threshold_audit(results, logger)
 
         return metrics
 
@@ -378,6 +433,8 @@ class InstanceDetectionMetric(BaseMetric):
             precision=float('nan'),
             recall=float('nan'),
             f1=float('nan'),
+            pixel_inter_sum=0.0,
+            pixel_area_sum=0.0,
         )
 
     def _accumulate_object_totals(self,
@@ -397,6 +454,8 @@ class InstanceDetectionMetric(BaseMetric):
                 dst['fp_precision'] += float(src.get('fp_precision', 0.0))
                 dst['tp_recall'] += float(src.get('tp_recall', 0.0))
                 dst['fn_recall'] += float(src.get('fn_recall', 0.0))
+                dst['pixel_inter_sum'] += float(src.get('pixel_inter_sum', 0.0))
+                dst['pixel_area_sum'] += float(src.get('pixel_area_sum', 0.0))
 
     def _accumulate_removed_totals(self,
                                    removed_totals: Dict[int, Dict[str, float]],
@@ -415,7 +474,8 @@ class InstanceDetectionMetric(BaseMetric):
             for bin_key in ('all', 'le100', 'gt100'):
                 out[class_label][bin_key] = dict(
                     edge_fp=0.0,
-                    dominant_counts=self._new_fp_dominant_counts())
+                    dominant_counts=self._new_fp_dominant_counts(),
+                    probably_unlabelled=0.0)
         return out
 
     def _new_fp_dominant_counts(self) -> Dict[str, float]:
@@ -443,6 +503,8 @@ class InstanceDetectionMetric(BaseMetric):
                 dst_dom = dst['dominant_counts']
                 for cat_key in dst_dom.keys():
                     dst_dom[cat_key] += float(src_dom.get(cat_key, 0.0))
+                dst['probably_unlabelled'] += float(
+                    src.get('probably_unlabelled', 0.0))
 
     def _finalize_object_totals(self,
                                 totals: Dict[int, Dict[str, Dict[str, float]]]) -> None:
@@ -788,7 +850,8 @@ class InstanceDetectionMetric(BaseMetric):
     def _compute_object_level_stats(self,
                                     pred_label: np.ndarray,
                                     gt_label: np.ndarray,
-                                    instance_map: np.ndarray) -> Dict[str, int]:
+                                    instance_map: np.ndarray,
+                                    rgb: Optional[np.ndarray] = None) -> Dict[str, int]:
         """Compute IoG-recall and IoP-precision by class and size bins.
 
         Recall bins are defined by GT instance area and use IoG thresholding.
@@ -797,6 +860,8 @@ class InstanceDetectionMetric(BaseMetric):
         """
         out = {'per_class': {}}
         out['fp_meta'] = {}
+        if self.audit_thresholds is not None:
+            out['raw_iog_iop'] = {}
 
         for class_label in self.object_eval_class_labels:
             class_out = {
@@ -806,10 +871,16 @@ class InstanceDetectionMetric(BaseMetric):
             }
             class_removed = {'all': 0.0, 'le100': 0.0, 'gt100': 0.0}
             class_fp_meta = {
-                'all': dict(edge_fp=0.0, dominant_counts=self._new_fp_dominant_counts()),
-                'le100': dict(edge_fp=0.0, dominant_counts=self._new_fp_dominant_counts()),
-                'gt100': dict(edge_fp=0.0, dominant_counts=self._new_fp_dominant_counts()),
+                'all':   dict(edge_fp=0.0, dominant_counts=self._new_fp_dominant_counts(),
+                              probably_unlabelled=0.0),
+                'le100': dict(edge_fp=0.0, dominant_counts=self._new_fp_dominant_counts(),
+                              probably_unlabelled=0.0),
+                'gt100': dict(edge_fp=0.0, dominant_counts=self._new_fp_dominant_counts(),
+                              probably_unlabelled=0.0),
             }
+            if self.audit_thresholds is not None:
+                _audit_gt: List[dict] = []
+                _audit_pred: List[dict] = []
 
             gt_instance_ids = np.unique(instance_map[gt_label == class_label])
             gt_instance_ids = gt_instance_ids[gt_instance_ids > 0]
@@ -844,6 +915,18 @@ class InstanceDetectionMetric(BaseMetric):
                 # IoP precision decision for this predicted island.
                 inter_class = int(class_overlap_mask.sum())
                 iop = self._safe_div(inter_class, comp_area)
+
+                # Accumulate raw pixel sums for per-pixel precision by size bin.
+                class_out['all']['pixel_inter_sum'] += float(inter_class)
+                class_out['all']['pixel_area_sum'] += float(comp_area)
+                class_out[comp_bin]['pixel_inter_sum'] += float(inter_class)
+                class_out[comp_bin]['pixel_area_sum'] += float(comp_area)
+
+                if self.audit_thresholds is not None:
+                    _audit_pred.append({
+                        'area': comp_area,
+                        'iop': 0.0 if np.isnan(iop) else float(iop),
+                    })
                 is_precision_tp = (not np.isnan(iop)) and (iop >= self.object_iop_thr)
 
                 if is_precision_tp:
@@ -860,6 +943,20 @@ class InstanceDetectionMetric(BaseMetric):
                         class_fp_meta['all']['edge_fp'] += 1
                         class_fp_meta[comp_bin]['edge_fp'] += 1
 
+                    # Greenness check: FP-on-background with high ExG may be
+                    # an unlabelled plant that the model correctly detected.
+                    if (rgb is not None
+                            and self.exg_unlabelled_thr is not None
+                            and dominant_gt_cat == self._fp_cat_name(
+                                self.class0_label)):
+                        r = rgb[comp_mask, 0].astype(np.float32)
+                        g = rgb[comp_mask, 1].astype(np.float32)
+                        b = rgb[comp_mask, 2].astype(np.float32)
+                        exg = float((2.0 * g - r - b).mean())
+                        if exg > self.exg_unlabelled_thr:
+                            class_fp_meta['all']['probably_unlabelled'] += 1
+                            class_fp_meta[comp_bin]['probably_unlabelled'] += 1
+
             for gt_id in gt_instance_ids:
                 gt_mask = instance_map == gt_id
                 gt_area = int(gt_mask.sum())
@@ -874,11 +971,18 @@ class InstanceDetectionMetric(BaseMetric):
                 if len(comp_ids) == 0:
                     class_out['all']['fn_recall'] += 1
                     class_out[gt_bin]['fn_recall'] += 1
+                    if self.audit_thresholds is not None:
+                        _audit_gt.append({'area': gt_area, 'iog': 0.0})
                     continue
 
                 virtual_pred_mask = np.isin(pred_labeled, comp_ids)
                 inter = int(np.logical_and(virtual_pred_mask, gt_mask).sum())
                 iog = self._safe_div(inter, gt_area)
+                if self.audit_thresholds is not None:
+                    _audit_gt.append({
+                        'area': gt_area,
+                        'iog': 0.0 if np.isnan(iog) else float(iog),
+                    })
 
                 if (not np.isnan(iog)) and (iog >= self.object_iog_thr):
                     class_out['all']['tp_recall'] += 1
@@ -902,6 +1006,11 @@ class InstanceDetectionMetric(BaseMetric):
                 out['removed_small'] = {}
             out['removed_small'][class_label] = class_removed
             out['fp_meta'][class_label] = class_fp_meta
+            if self.audit_thresholds is not None:
+                out['raw_iog_iop'][class_label] = {
+                    'gt': _audit_gt,
+                    'pred': _audit_pred,
+                }
 
         return out
 
@@ -957,14 +1066,55 @@ class InstanceDetectionMetric(BaseMetric):
                 ))
         return out
 
+    def _log_paper_summary(self,
+                          logger: MMLogger,
+                          metrics: Dict[str, float],
+                          n_images: int) -> None:
+        """Print the 9-column WACV paper metrics row for this model."""
+        n = max(1, n_images)
+        fp_soil_raw = metrics.get('obj_weed_le100_fp_on_background_soil', 0.0)
+        fp_veg = metrics.get('obj_weed_le100_fp_probably_unlabelled', 0.0)
+        fp_bare = fp_soil_raw - fp_veg
+        fp_crop = metrics.get('obj_weed_le100_fp_on_crop', 0.0)
+
+        table = PrettyTable()
+        table.field_names = [
+            'IoU Crop(%)',
+            'IoU Weed(%)',
+            'WeedPrec All(%)',
+            'WeedPrec <=100px(%)',
+            'TinyRec Crop(%)',
+            'TinyRec Weed(%)',
+            'FP/img Crop',
+            'FP/img Soil_bare',
+            'FP/img Soil_veg',
+        ]
+        table.add_row([
+            metrics.get('pixel_IoU_crop', float('nan')),
+            metrics.get('weed_iou', float('nan')),
+            metrics.get('weed_precision', float('nan')),
+            metrics.get('weed_pixel_prec_le100', float('nan')),
+            metrics.get('obj_crop_le100_iog_recall', float('nan')),
+            metrics.get('obj_weed_le100_iog_recall', float('nan')),
+            round(fp_crop / n, 2),
+            round(fp_bare / n, 2),
+            round(fp_veg / n, 2),
+        ])
+        print_log('\nWACV Paper Table (N={:d} images):'.format(n_images), logger=logger)
+        print_log('\n' + table.get_string(), logger=logger)
+
     def _log_object_summary(self,
                             logger: MMLogger,
                             object_totals: Dict[int, Dict[str, Dict[str, float]]],
                             pixel_metrics: List[Dict[str, float]],
                             fp_breakdown_totals: Dict[int, Dict[str, dict]]) -> None:
         table = PrettyTable()
+        exg_col = (f'Prob.Unlabelled\n(ExG>{self.exg_unlabelled_thr:.0f})'
+                   if self.exg_unlabelled_thr is not None else 'Prob.Unlabelled')
         table.field_names = [
             'Plant Category',
+            'GT Instances',
+            'Detected',
             'IoU',
             f'Recall (IoG>={self.object_iog_thr * 100.0:.1f}%)',
             f'Obj-Precision (IoP>={self.object_iop_thr * 100.0:.1f}%)',
@@ -972,6 +1122,7 @@ class InstanceDetectionMetric(BaseMetric):
             'F1',
             f'Pred on {self._fp_cat_name(self.class0_label)}',
             f'Pred on {self._fp_cat_name(self.class1_label)}',
+            exg_col,
         ]
 
         row_specs = [
@@ -990,6 +1141,8 @@ class InstanceDetectionMetric(BaseMetric):
 
             table.add_row([
                 row_name,
+                int(obj['gt_total']),
+                int(obj['tp_recall']),
                 np.round(px['iou'] * 100.0, 2),
                 np.round(obj['recall'] * 100.0, 2),
                 np.round(obj['precision'] * 100.0, 2),
@@ -997,6 +1150,7 @@ class InstanceDetectionMetric(BaseMetric):
                 np.round(obj['f1'] * 100.0, 2),
                 int(dom[self._fp_cat_name(self.class0_label)]),
                 int(dom[self._fp_cat_name(self.class1_label)]),
+                int(fp_bin.get('probably_unlabelled', 0)),
             ])
 
         print_log(
@@ -1081,6 +1235,137 @@ class InstanceDetectionMetric(BaseMetric):
 
         print_log('FP breakdown by GT source and edge truncation:', logger=logger)
         print_log('\n' + table.get_string(), logger=logger)
+
+    def _run_threshold_audit(self, results: list, logger: MMLogger) -> None:
+        """Re-threshold stored IoG/IoP scores across a sweep of threshold values."""
+        raw_accum: Dict[int, Dict[str, List[dict]]] = {
+            cl: {'gt': [], 'pred': []}
+            for cl in self.object_eval_class_labels
+        }
+        for item in results:
+            raw = item['object_stats'].get('raw_iog_iop', {})
+            for cl in self.object_eval_class_labels:
+                cls_raw = raw.get(cl, {'gt': [], 'pred': []})
+                raw_accum[cl]['gt'].extend(cls_raw['gt'])
+                raw_accum[cl]['pred'].extend(cls_raw['pred'])
+
+        rows: List[dict] = []
+        for thr in self.audit_thresholds:
+            row: dict = {'thr': thr}
+            for cl in self.object_eval_class_labels:
+                gt_list = raw_accum[cl]['gt']
+                pred_list = raw_accum[cl]['pred']
+
+                tp_r = sum(1 for g in gt_list if g['iog'] >= thr)
+                recall = self._safe_div(tp_r, len(gt_list))
+
+                tp_p = sum(1 for p in pred_list if p['iop'] >= thr)
+                precision = self._safe_div(tp_p, len(pred_list))
+
+                row[cl] = {
+                    'gt_total': len(gt_list),
+                    'pred_total': len(pred_list),
+                    'tp_recall': tp_r,
+                    'fn_recall': len(gt_list) - tp_r,
+                    'tp_precision': tp_p,
+                    'fp_precision': len(pred_list) - tp_p,
+                    'recall': recall,
+                    'precision': precision,
+                    'f1': self._f1(precision, recall),
+                }
+            rows.append(row)
+
+        self._print_audit_table(rows, logger)
+        if self.audit_figure_path is not None:
+            self._plot_threshold_audit(rows, logger)
+
+    def _print_audit_table(self, rows: List[dict], logger: MMLogger) -> None:
+        table = PrettyTable()
+        header = ['IoG=IoP\nThreshold']
+        for cl in self.object_eval_class_labels:
+            cls_name = self._class_name_for_label(cl)
+            header += [
+                f'{cls_name}\nGT',
+                f'{cls_name}\nDetected',
+                f'{cls_name}\nRecall',
+                f'{cls_name}\nPrecision',
+                f'{cls_name}\nF1',
+            ]
+        table.field_names = header
+
+        for row in rows:
+            thr_str = f'{row["thr"] * 100.0:.0f}%'
+            cells: list = [thr_str]
+            for cl in self.object_eval_class_labels:
+                m = row[cl]
+                cells.append(int(m['gt_total']))
+                cells.append(int(m['tp_recall']))
+                cells.append(
+                    '-' if np.isnan(m['recall']) else
+                    f'{m["recall"] * 100.0:.1f}')
+                cells.append(
+                    '-' if np.isnan(m['precision']) else
+                    f'{m["precision"] * 100.0:.1f}')
+                cells.append(
+                    '-' if np.isnan(m['f1']) else
+                    f'{m["f1"] * 100.0:.1f}')
+            table.add_row(cells)
+
+        print_log('IoG/IoP threshold audit sweep:', logger=logger)
+        print_log('\n' + table.get_string(), logger=logger)
+
+    def _plot_threshold_audit(
+            self, rows: List[dict], logger: MMLogger) -> None:
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print_log(
+                'matplotlib not available; skipping threshold audit figure.',
+                logger=logger)
+            return
+
+        thrs_pct = [r['thr'] * 100.0 for r in rows]
+        n_cls = len(self.object_eval_class_labels)
+        fig, axes = plt.subplots(1, n_cls, figsize=(5 * n_cls, 4),
+                                 sharey=True, squeeze=False)
+
+        for ax, cl in zip(axes[0], self.object_eval_class_labels):
+            m_list = [r[cl] for r in rows]
+            recalls = [
+                float('nan') if np.isnan(m['recall']) else m['recall'] * 100.0
+                for m in m_list]
+            precisions = [
+                float('nan') if np.isnan(m['precision']) else
+                m['precision'] * 100.0 for m in m_list]
+            f1s = [
+                float('nan') if np.isnan(m['f1']) else m['f1'] * 100.0
+                for m in m_list]
+
+            ax.plot(thrs_pct, recalls, 'b-o', label='Recall (IoG)')
+            ax.plot(thrs_pct, precisions, 'r-s', label='Precision (IoP)')
+            ax.plot(thrs_pct, f1s, 'g-^', label='F1')
+            ax.set_xlabel('IoG = IoP Threshold (%)')
+            ax.set_ylabel('Metric (%)')
+            ax.set_title(self._class_name_for_label(cl))
+            ax.legend()
+            ax.set_xticks(thrs_pct)
+            ax.set_xticklabels([f'{t:.0f}%' for t in thrs_pct])
+            ax.set_ylim(0, 105)
+            ax.grid(True, alpha=0.3)
+
+        fig.suptitle('Object Detection Threshold Audit (IoG = IoP sweep)')
+        fig.tight_layout()
+
+        out_dir = osp.dirname(self.audit_figure_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        fig.savefig(self.audit_figure_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print_log(
+            f'Threshold audit figure saved to: {self.audit_figure_path}',
+            logger=logger)
 
     def _resolve_instance_map_path(self, data_sample: dict) -> str:
         direct_path = data_sample.get('instance_map_path', None)
