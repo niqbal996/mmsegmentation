@@ -318,6 +318,7 @@ class InstanceDetectionMetric(BaseMetric):
         weed_obj = object_totals[self.class2_label]['all']
 
         metrics = OrderedDict()
+        metrics['n_images'] = len(results)
 
         # Backward-compatible aggregate object metrics (weed, all sizes).
         # tp/fp map to IoP precision counts; fn maps to IoG recall misses.
@@ -407,7 +408,8 @@ class InstanceDetectionMetric(BaseMetric):
         self._vis_case_seq = 0
 
         if self.audit_thresholds is not None:
-            self._run_threshold_audit(results, logger)
+            self._run_threshold_audit(
+                results, logger, per_class, fp_breakdown_totals)
 
         return metrics
 
@@ -880,7 +882,6 @@ class InstanceDetectionMetric(BaseMetric):
             }
             if self.audit_thresholds is not None:
                 _audit_gt: List[dict] = []
-                _audit_pred: List[dict] = []
 
             gt_instance_ids = np.unique(instance_map[gt_label == class_label])
             gt_instance_ids = gt_instance_ids[gt_instance_ids > 0]
@@ -922,11 +923,6 @@ class InstanceDetectionMetric(BaseMetric):
                 class_out[comp_bin]['pixel_inter_sum'] += float(inter_class)
                 class_out[comp_bin]['pixel_area_sum'] += float(comp_area)
 
-                if self.audit_thresholds is not None:
-                    _audit_pred.append({
-                        'area': comp_area,
-                        'iop': 0.0 if np.isnan(iop) else float(iop),
-                    })
                 is_precision_tp = (not np.isnan(iop)) and (iop >= self.object_iop_thr)
 
                 if is_precision_tp:
@@ -1007,10 +1003,7 @@ class InstanceDetectionMetric(BaseMetric):
             out['removed_small'][class_label] = class_removed
             out['fp_meta'][class_label] = class_fp_meta
             if self.audit_thresholds is not None:
-                out['raw_iog_iop'][class_label] = {
-                    'gt': _audit_gt,
-                    'pred': _audit_pred,
-                }
+                out['raw_iog_iop'][class_label] = {'gt': _audit_gt}
 
         return out
 
@@ -1236,82 +1229,87 @@ class InstanceDetectionMetric(BaseMetric):
         print_log('FP breakdown by GT source and edge truncation:', logger=logger)
         print_log('\n' + table.get_string(), logger=logger)
 
-    def _run_threshold_audit(self, results: list, logger: MMLogger) -> None:
-        """Re-threshold stored IoG/IoP scores across a sweep of threshold values."""
-        raw_accum: Dict[int, Dict[str, List[dict]]] = {
-            cl: {'gt': [], 'pred': []}
-            for cl in self.object_eval_class_labels
-        }
+    def _run_threshold_audit(
+            self,
+            results: list,
+            logger: MMLogger,
+            pixel_metrics: List[Dict[str, float]],
+            fp_breakdown_totals: Dict[int, Dict[str, dict]]) -> None:
+        """Sweep IoG recall threshold τ with stable precision/FP reference values.
+
+        Only weed recall varies with τ. Weed pixel precision and FP/image are
+        derived from the already-computed confusion matrix and FP breakdown and
+        are constant across rows, demonstrating that the threshold choice does
+        not materially affect those metrics.
+        """
+        n_images = max(1, len(results))
+        weed_cl = self.class2_label
+
+        # Collect GT IoG scores across all samples.
+        weed_gt: List[dict] = []
         for item in results:
             raw = item['object_stats'].get('raw_iog_iop', {})
-            for cl in self.object_eval_class_labels:
-                cls_raw = raw.get(cl, {'gt': [], 'pred': []})
-                raw_accum[cl]['gt'].extend(cls_raw['gt'])
-                raw_accum[cl]['pred'].extend(cls_raw['pred'])
+            weed_gt.extend(raw.get(weed_cl, {}).get('gt', []))
 
+        # Constant reference values (do not depend on τ).
+        weed_pix_prec = pixel_metrics[2]['precision']  # confusion-matrix precision
+        fp_weed_bin = fp_breakdown_totals[weed_cl]['le100']['dominant_counts']
+        fp_on_crop = fp_weed_bin.get(
+            self._fp_cat_name(self.class1_label), 0.0) / n_images
+        fp_on_soil = fp_weed_bin.get(
+            self._fp_cat_name(self.class0_label), 0.0) / n_images
+
+        gt_total = len(weed_gt)
         rows: List[dict] = []
         for thr in self.audit_thresholds:
-            row: dict = {'thr': thr}
-            for cl in self.object_eval_class_labels:
-                gt_list = raw_accum[cl]['gt']
-                pred_list = raw_accum[cl]['pred']
-
-                tp_r = sum(1 for g in gt_list if g['iog'] >= thr)
-                recall = self._safe_div(tp_r, len(gt_list))
-
-                tp_p = sum(1 for p in pred_list if p['iop'] >= thr)
-                precision = self._safe_div(tp_p, len(pred_list))
-
-                row[cl] = {
-                    'gt_total': len(gt_list),
-                    'pred_total': len(pred_list),
-                    'tp_recall': tp_r,
-                    'fn_recall': len(gt_list) - tp_r,
-                    'tp_precision': tp_p,
-                    'fp_precision': len(pred_list) - tp_p,
-                    'recall': recall,
-                    'precision': precision,
-                    'f1': self._f1(precision, recall),
-                }
-            rows.append(row)
+            tp_r = sum(1 for g in weed_gt if g['iog'] >= thr)
+            rows.append({
+                'thr': thr,
+                'gt_total': gt_total,
+                'tp_recall': tp_r,
+                'recall': self._safe_div(tp_r, gt_total),
+                'weed_pix_prec': weed_pix_prec,
+                'fp_on_crop': fp_on_crop,
+                'fp_on_soil': fp_on_soil,
+            })
 
         self._print_audit_table(rows, logger)
         if self.audit_figure_path is not None:
             self._plot_threshold_audit(rows, logger)
 
     def _print_audit_table(self, rows: List[dict], logger: MMLogger) -> None:
+        weed_name = self._class_name_for_label(self.class2_label)
+        crop_name = self._class_name_for_label(self.class1_label)
         table = PrettyTable()
-        header = ['IoG=IoP\nThreshold']
-        for cl in self.object_eval_class_labels:
-            cls_name = self._class_name_for_label(cl)
-            header += [
-                f'{cls_name}\nGT',
-                f'{cls_name}\nDetected',
-                f'{cls_name}\nRecall',
-                f'{cls_name}\nPrecision',
-                f'{cls_name}\nF1',
-            ]
-        table.field_names = header
+        table.field_names = [
+            'τ (%)',
+            f'{weed_name}\nDetected (of N)',
+            f'{weed_name} Recall\n(IoG>=τ, %)',
+            f'{weed_name} Pix-Prec\n(%, constant)',
+            f'FP/img on {crop_name}\n(<=100px, constant)',
+            f'FP/img on soil\n(<=100px, constant)',
+        ]
 
         for row in rows:
-            thr_str = f'{row["thr"] * 100.0:.0f}%'
-            cells: list = [thr_str]
-            for cl in self.object_eval_class_labels:
-                m = row[cl]
-                cells.append(int(m['gt_total']))
-                cells.append(int(m['tp_recall']))
-                cells.append(
-                    '-' if np.isnan(m['recall']) else
-                    f'{m["recall"] * 100.0:.1f}')
-                cells.append(
-                    '-' if np.isnan(m['precision']) else
-                    f'{m["precision"] * 100.0:.1f}')
-                cells.append(
-                    '-' if np.isnan(m['f1']) else
-                    f'{m["f1"] * 100.0:.1f}')
-            table.add_row(cells)
+            recall_str = (
+                '-' if np.isnan(row['recall'])
+                else f'{row["recall"] * 100.0:.1f}')
+            pix_str = (
+                '-' if np.isnan(row['weed_pix_prec'])
+                else f'{row["weed_pix_prec"] * 100.0:.1f}')
+            table.add_row([
+                f'{row["thr"] * 100.0:.0f}%',
+                f'{int(row["tp_recall"])} / {int(row["gt_total"])}',
+                recall_str,
+                pix_str,
+                f'{row["fp_on_crop"]:.2f}',
+                f'{row["fp_on_soil"]:.2f}',
+            ])
 
-        print_log('IoG/IoP threshold audit sweep:', logger=logger)
+        print_log(
+            'Threshold audit — recall varies with τ; pixel precision and '
+            'FP/img are constant (shown as reference):',
+            logger=logger)
         print_log('\n' + table.get_string(), logger=logger)
 
     def _plot_threshold_audit(
@@ -1327,35 +1325,58 @@ class InstanceDetectionMetric(BaseMetric):
             return
 
         thrs_pct = [r['thr'] * 100.0 for r in rows]
-        n_cls = len(self.object_eval_class_labels)
-        fig, axes = plt.subplots(1, n_cls, figsize=(5 * n_cls, 4),
-                                 sharey=True, squeeze=False)
+        recalls = [
+            float('nan') if np.isnan(r['recall'])
+            else r['recall'] * 100.0 for r in rows]
+        pix_prec_const = (
+            float('nan') if np.isnan(rows[0]['weed_pix_prec'])
+            else rows[0]['weed_pix_prec'] * 100.0)
+        fp_crop_const = rows[0]['fp_on_crop']
+        fp_soil_const = rows[0]['fp_on_soil']
 
-        for ax, cl in zip(axes[0], self.object_eval_class_labels):
-            m_list = [r[cl] for r in rows]
-            recalls = [
-                float('nan') if np.isnan(m['recall']) else m['recall'] * 100.0
-                for m in m_list]
-            precisions = [
-                float('nan') if np.isnan(m['precision']) else
-                m['precision'] * 100.0 for m in m_list]
-            f1s = [
-                float('nan') if np.isnan(m['f1']) else m['f1'] * 100.0
-                for m in m_list]
+        weed_name = self._class_name_for_label(self.class2_label)
+        crop_name = self._class_name_for_label(self.class1_label)
+        baseline_pct = self.object_iog_thr * 100.0
 
-            ax.plot(thrs_pct, recalls, 'b-o', label='Recall (IoG)')
-            ax.plot(thrs_pct, precisions, 'r-s', label='Precision (IoP)')
-            ax.plot(thrs_pct, f1s, 'g-^', label='F1')
-            ax.set_xlabel('IoG = IoP Threshold (%)')
-            ax.set_ylabel('Metric (%)')
-            ax.set_title(self._class_name_for_label(cl))
-            ax.legend()
-            ax.set_xticks(thrs_pct)
-            ax.set_xticklabels([f'{t:.0f}%' for t in thrs_pct])
-            ax.set_ylim(0, 105)
-            ax.grid(True, alpha=0.3)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
-        fig.suptitle('Object Detection Threshold Audit (IoG = IoP sweep)')
+        # Left: recall curve + constant pix-prec reference line.
+        ax1.plot(thrs_pct, recalls, 'b-o', linewidth=2,
+                 label=f'{weed_name} Recall (IoG>=τ)')
+        if not np.isnan(pix_prec_const):
+            ax1.axhline(pix_prec_const, color='r', linestyle='--', linewidth=1.5,
+                        label=f'{weed_name} Pix-Prec ({pix_prec_const:.1f}%, const)')
+        ax1.axvline(baseline_pct, color='gray', linestyle=':', linewidth=1,
+                    label=f'Baseline τ={baseline_pct:.0f}%')
+        ax1.set_xlabel('Threshold τ (%)')
+        ax1.set_ylabel('Metric (%)')
+        ax1.set_title(f'{weed_name}: Recall vs τ')
+        ax1.legend(fontsize=8)
+        ax1.set_xticks(thrs_pct)
+        ax1.set_xticklabels([f'{t:.0f}%' for t in thrs_pct])
+        ax1.set_ylim(0, 105)
+        ax1.grid(True, alpha=0.3)
+
+        # Right: constant FP/img reference lines — flat across τ.
+        ax2.axhline(fp_crop_const, color='g', linestyle='--', linewidth=1.5,
+                    label=f'FP on {crop_name} ({fp_crop_const:.2f}/img, const)')
+        ax2.axhline(fp_soil_const, color='m', linestyle='--', linewidth=1.5,
+                    label=f'FP on soil ({fp_soil_const:.2f}/img, const)')
+        ax2.axvline(baseline_pct, color='gray', linestyle=':', linewidth=1,
+                    label=f'Baseline τ={baseline_pct:.0f}%')
+        ax2.set_xlabel('Threshold τ (%)')
+        ax2.set_ylabel('FP / image')
+        ax2.set_title('FP per Image (<=100px) — constant across τ')
+        ax2.legend(fontsize=8)
+        ax2.set_xticks(thrs_pct)
+        ax2.set_xticklabels([f'{t:.0f}%' for t in thrs_pct])
+        ax2.set_ylim(bottom=0)
+        ax2.grid(True, alpha=0.3)
+
+        fig.suptitle(
+            f'Threshold Audit: τ={baseline_pct:.0f}% baseline '
+            f'(IoG={self.object_iog_thr * 100:.0f}%, '
+            f'IoP={self.object_iop_thr * 100:.0f}%)')
         fig.tight_layout()
 
         out_dir = osp.dirname(self.audit_figure_path)
