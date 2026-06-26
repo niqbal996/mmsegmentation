@@ -11,6 +11,7 @@ import copy
 import datetime as dt
 import json
 import logging
+import math
 import os
 import os.path as osp
 import re
@@ -30,9 +31,68 @@ register_all_modules()
 SCHEDULE_ENTRY_PATTERN = re.compile(
     r'^\s*"(?P<config>[^";]+);(?P<workdir>[^"]+)"\s*,?\s*$')
 TIMESTAMP_DIR_PATTERN = re.compile(r'^\d{8}_\d{6}$')
-METRICS_FILE_PATTERN = re.compile(r'^(?P<idx>\d+)_metrics\.json$')
+METRICS_FILE_PATTERN = re.compile(r'^(?P<idx>\d+)_metrics\.json$')  # legacy format
 ITER_PATTERN = re.compile(r'_iter_(\d+)\.pth$')
 NUMBER_PATTERN = re.compile(r'^[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?$')
+
+_PAPER_COLS = [
+    'IoU Crop(%)', 'IoU Weed(%)', 'WeedPrec All(%)', 'WeedPrec<=100px(%)',
+    'TinyRec Crop(%)', 'TinyRec Weed(%)', 'FP/img Crop', 'FP/img Soil_bare', 'FP/img Soil_veg',
+]
+
+
+def _paper_row(metrics: Dict[str, float]) -> List[str]:
+    n = max(1, int(metrics.get('n_images', 1)))
+    fp_soil = metrics.get('obj_weed_le100_fp_on_background_soil', float('nan'))
+    fp_veg = metrics.get('obj_weed_le100_fp_probably_unlabelled', float('nan'))
+    fp_bare = (fp_soil - fp_veg
+               if not (math.isnan(fp_soil) or math.isnan(fp_veg))
+               else float('nan'))
+    fp_crop = metrics.get('obj_weed_le100_fp_on_crop', float('nan'))
+
+    def _f(v: Any) -> str:
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return '-'
+        return str(round(float(v), 2))
+
+    return [
+        _f(metrics.get('pixel_IoU_crop')),
+        _f(metrics.get('weed_iou')),
+        _f(metrics.get('weed_precision')),
+        _f(metrics.get('weed_pixel_prec_le100')),
+        _f(metrics.get('obj_crop_le100_iog_recall')),
+        _f(metrics.get('obj_weed_le100_iog_recall')),
+        _f(fp_crop / n if not math.isnan(fp_crop) else float('nan')),
+        _f(fp_bare / n if not math.isnan(fp_bare) else float('nan')),
+        _f(fp_veg / n if not math.isnan(fp_veg) else float('nan')),
+    ]
+
+
+def print_paper_table(results: Sequence[Dict[str, Any]]) -> None:
+    successful = [item for item in results if item.get('status') == 'success']
+    if not successful:
+        return
+
+    columns = ['Experiment'] + _PAPER_COLS
+    rows: List[Dict[str, str]] = []
+    for item in successful:
+        m = item.get('metrics', {})
+        row: Dict[str, str] = {'Experiment': item.get('experiment_name', '?')}
+        for col, val in zip(_PAPER_COLS, _paper_row(m if isinstance(m, dict) else {})):
+            row[col] = val
+        rows.append(row)
+
+    widths = {col: max(len(col), *(len(r[col]) for r in rows)) for col in columns}
+    sep = '+' + '+'.join('-' * (widths[c] + 2) for c in columns) + '+'
+    hdr = '| ' + ' | '.join(c.ljust(widths[c]) for c in columns) + ' |'
+
+    print('\nWACV Paper Table')
+    print(sep)
+    print(hdr)
+    print(sep)
+    for row in rows:
+        print('| ' + ' | '.join(row[c].ljust(widths[c]) for c in columns) + ' |')
+    print(sep)
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,6 +150,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=('If set, predictions are saved for offline evaluation. '
               'Each experiment writes into <out>/<experiment_name>.'))
+    parser.add_argument(
+        '--force',
+        action='store_true',
+        help=(
+            'Re-run evaluation even when a metrics json already exists in the '
+            'metrics subdir (default: skip already-evaluated experiments)'))
     parser.add_argument(
         '--strict',
         action='store_true',
@@ -463,16 +529,43 @@ def extract_classwise_metrics_from_log(test_dir: Optional[str]) -> Dict[str, flo
     return classwise
 
 
-def next_metrics_index(metrics_dir: str) -> int:
+def find_existing_metrics_file(metrics_dir: str, experiment_name: str) -> Optional[str]:
+    """Return the highest-indexed metrics json for experiment_name in metrics_dir, or None."""
+    if not osp.isdir(metrics_dir):
+        return None
+
+    named_pattern = re.compile(
+        r'^' + re.escape(experiment_name) + r'_(?P<idx>\d{4})_metrics\.json$')
+
+    max_idx = 0
+    best_file: Optional[str] = None
+    for filename in os.listdir(metrics_dir):
+        m = named_pattern.match(filename)
+        if not m:
+            m = METRICS_FILE_PATTERN.match(filename)  # backward compat
+        if not m:
+            continue
+        idx = int(m.group('idx'))
+        if idx > max_idx:
+            max_idx = idx
+            best_file = osp.join(metrics_dir, filename)
+
+    return best_file
+
+
+def next_metrics_index(metrics_dir: str, experiment_name: str) -> int:
     if not osp.isdir(metrics_dir):
         return 1
 
+    named_pattern = re.compile(
+        r'^' + re.escape(experiment_name) + r'_(?P<idx>\d{4})_metrics\.json$')
+
     max_idx = 0
     for filename in os.listdir(metrics_dir):
-        match = METRICS_FILE_PATTERN.match(filename)
-        if not match:
+        m = named_pattern.match(filename)
+        if not m:
             continue
-        max_idx = max(max_idx, int(match.group('idx')))
+        max_idx = max(max_idx, int(m.group('idx')))
 
     return max_idx + 1
 
@@ -564,6 +657,34 @@ def run_single_experiment(config_path: str, work_dir: str,
         result['error'] = f'Config file not found: {config_path}'
         return result
 
+    # Resume: if a metrics file already exists and --force was not passed, load
+    # it and return without re-running the evaluation.
+    if not getattr(args, 'force', False):
+        metrics_dir_check = osp.join(work_dir, args.metrics_subdir)
+        existing_file = find_existing_metrics_file(metrics_dir_check, experiment_name)
+        if existing_file is not None:
+            try:
+                payload = try_load_json(existing_file)
+            except OSError:
+                payload = None
+            if payload and isinstance(payload, dict):
+                metrics = payload.get('metrics', {})
+                if metrics:
+                    result.update({
+                        'status': 'success',
+                        'skipped': True,
+                        'runner_work_dir': payload.get('runner_work_dir', work_dir),
+                        'test_run_dir': payload.get('test_run_dir'),
+                        'best_checkpoint': payload.get('best_checkpoint'),
+                        'metrics_file': existing_file,
+                        'metrics': metrics,
+                    })
+                    if 'eval_config' in payload:
+                        result['eval_config'] = payload['eval_config']
+                    if 'eval_split' in payload:
+                        result['eval_split'] = payload['eval_split']
+                    return result
+
     best_ckpt = find_best_checkpoint(work_dir)
     if best_ckpt is None:
         result['error'] = (
@@ -625,8 +746,8 @@ def run_single_experiment(config_path: str, work_dir: str,
 
     metrics_dir = osp.join(work_dir, args.metrics_subdir)
     os.makedirs(metrics_dir, exist_ok=True)
-    metrics_idx = next_metrics_index(metrics_dir)
-    metrics_filename = f'{metrics_idx:04d}_metrics.json'
+    metrics_idx = next_metrics_index(metrics_dir, experiment_name)
+    metrics_filename = f'{experiment_name}_{metrics_idx:04d}_metrics.json'
     metrics_path = osp.join(metrics_dir, metrics_filename)
 
     metrics_payload = {
@@ -728,9 +849,14 @@ def main() -> None:
         all_results.append(result)
 
         if result['status'] == 'success':
-            print_log(
-                f"Saved metrics for {exp_name}: {result['metrics_file']}",
-                logger='current')
+            if result.get('skipped'):
+                print_log(
+                    f"Skipped (cached) {exp_name}: {result['metrics_file']}",
+                    logger='current')
+            else:
+                print_log(
+                    f"Saved metrics for {exp_name}: {result['metrics_file']}",
+                    logger='current')
         else:
             print_log(
                 f"Failed {exp_name}: {result.get('error', 'Unknown error')}",
@@ -756,6 +882,8 @@ def main() -> None:
         'total_experiments': len(all_results),
         'successful_experiments': sum(
             1 for item in all_results if item.get('status') == 'success'),
+        'skipped_experiments': sum(
+            1 for item in all_results if item.get('skipped')),
         'failed_experiments': sum(
             1 for item in all_results if item.get('status') != 'success'),
         'experiments': experiments_map,
@@ -765,6 +893,7 @@ def main() -> None:
     write_json(summary_output, summary_payload)
 
     print_table(all_results)
+    print_paper_table(all_results)
 
     print('\nConsolidated summary written to:')
     print(summary_output)

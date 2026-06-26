@@ -3,13 +3,101 @@
 
 import argparse
 import json
+import math
 import os.path as osp
+import re
 from numbers import Number
 from typing import Any, Dict, List, Optional, Sequence
 
 
 DEFAULT_SUMMARY = 'metrics_sweep_summary.json'
 PREFERRED_METRICS = ['mIoU', 'mAcc', 'aAcc', 'IoU_weed', 'Acc_weed', 'time']
+
+_PAPER_COLS = [
+    'IoU Crop(%)', 'IoU Weed(%)', 'WeedPrec All(%)', 'WeedPrec<=100px(%)',
+    'TinyRec Crop(%)', 'TinyRec Weed(%)', 'FP/img Crop', 'FP/img Soil_bare', 'FP/img Soil_veg',
+]
+
+
+def _paper_row(metrics: Dict[str, Any], n_images_fallback: Optional[int] = None) -> List[str]:
+    stored = metrics.get('n_images')
+    if stored is not None:
+        n = max(1, int(stored))
+    elif n_images_fallback is not None:
+        n = max(1, n_images_fallback)
+    else:
+        n = None  # unknown — show raw counts with a '/' marker
+
+    fp_soil = metrics.get('obj_weed_le100_fp_on_background_soil', float('nan'))
+    fp_veg = metrics.get('obj_weed_le100_fp_probably_unlabelled', float('nan'))
+    fp_bare = (fp_soil - fp_veg
+               if not (math.isnan(float(fp_soil)) or math.isnan(float(fp_veg)))
+               else float('nan'))
+    fp_crop = metrics.get('obj_weed_le100_fp_on_crop', float('nan'))
+
+    def _f(v: Any) -> str:
+        if v is None:
+            return '-'
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            return '-'
+        if math.isnan(fv):
+            return '-'
+        return str(round(fv, 2))
+
+    def _fp(raw: Any) -> str:
+        if n is None:
+            # No n_images available: show raw count with a note
+            v = _f(raw)
+            return v + '(raw)' if v != '-' else '-'
+        try:
+            return _f(float(raw) / n)
+        except (TypeError, ValueError):
+            return '-'
+
+    return [
+        _f(metrics.get('pixel_IoU_crop')),
+        _f(metrics.get('weed_iou')),
+        _f(metrics.get('weed_precision')),
+        _f(metrics.get('weed_pixel_prec_le100')),
+        _f(metrics.get('obj_crop_le100_iog_recall')),
+        _f(metrics.get('obj_weed_le100_iog_recall')),
+        _fp(fp_crop),
+        _fp(fp_bare),
+        _fp(fp_veg),
+    ]
+
+
+def print_paper_table(results: Sequence[Dict[str, Any]],
+                      n_images_fallback: Optional[int] = None) -> None:
+    successful = [item for item in results if item.get('status') == 'success']
+    if not successful:
+        print('\nWACV Paper Table\nNo successful experiments found.')
+        return
+
+    columns = ['Experiment'] + _PAPER_COLS
+    rows: List[Dict[str, str]] = []
+    for item in successful:
+        m = item.get('metrics', {})
+        row: Dict[str, str] = {'Experiment': experiment_name(item)}
+        for col, val in zip(_PAPER_COLS,
+                            _paper_row(m if isinstance(m, dict) else {},
+                                       n_images_fallback=n_images_fallback)):
+            row[col] = val
+        rows.append(row)
+
+    widths = {col: max(len(col), *(len(r[col]) for r in rows)) for col in columns}
+    sep = '+' + '+'.join('-' * (widths[c] + 2) for c in columns) + '+'
+    hdr = '| ' + ' | '.join(c.ljust(widths[c]) for c in columns) + ' |'
+
+    print('\nWACV Paper Table')
+    print(sep)
+    print(hdr)
+    print(sep)
+    for row in rows:
+        print('| ' + ' | '.join(row[c].ljust(widths[c]) for c in columns) + ' |')
+    print(sep)
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,6 +128,19 @@ def parse_args() -> argparse.Namespace:
         '--successful-only',
         action='store_true',
         help='Do not print the failed experiments section')
+    parser.add_argument(
+        '--paper-table',
+        action='store_true',
+        help='Print the WACV 9-column paper table instead of (or in addition to) the full table')
+    parser.add_argument(
+        '--n-images',
+        type=int,
+        default=None,
+        help=(
+            'Number of validation images used to normalise FP/img columns in '
+            'the paper table. Only needed for JSON files generated before '
+            'n_images was saved (i.e. older runs). New runs store it '
+            'automatically. Example: --n-images 772'))
     return parser.parse_args()
 
 
@@ -123,18 +224,27 @@ def experiment_name(item: Dict[str, Any]) -> str:
     return '?'
 
 
+def _variant_pct(variant: str) -> float:
+    """Return the data-percentage for a variant string.
+
+    Variants with an explicit NNpct marker sort by that number (1, 5, 10, …).
+    Baseline / ohem_loss / vanilla / empty variants are treated as 100 % and
+    sort last.
+    """
+    m = re.search(r'(\d+)pct', variant)
+    if m:
+        return float(m.group(1))
+    return 100.0
+
+
 def model_dataset_sort_key(item: Dict[str, Any]) -> tuple:
     name = experiment_name(item)
+    # Longer dataset names must be checked first to avoid '_phenobench'
+    # matching inside '_sugarbeetsynthetic2026_2phenobench'.
     dataset_order = {
-        'phenobench': 0,
-        'sugarbeetsynthetic2026': 1,
         'sugarbeetsynthetic2026_2phenobench': 2,
-    }
-    variant_order = {
-        'baseline': 0,
-        'vanilla': 0,
-        '': 0,
-        'ohem_loss': 1,
+        'sugarbeetsynthetic2026': 1,
+        'phenobench': 0,
     }
 
     for dataset, dataset_idx in dataset_order.items():
@@ -147,12 +257,12 @@ def model_dataset_sort_key(item: Dict[str, Any]) -> tuple:
         return (
             model_part.lower(),
             dataset_idx,
-            variant_order.get(variant, 10),
+            _variant_pct(variant),
             variant.lower(),
             name.lower(),
         )
 
-    return (name.lower(), len(dataset_order), 10, '', name.lower())
+    return (name.lower(), len(dataset_order), 100.0, '', name.lower())
 
 
 def sort_results(results: Sequence[Dict[str, Any]],
@@ -239,6 +349,8 @@ def main() -> None:
         f"failed")
 
     print_table(results, metric_keys, successful_only=args.successful_only)
+    if args.paper_table:
+        print_paper_table(results, n_images_fallback=args.n_images)
 
 
 if __name__ == '__main__':
