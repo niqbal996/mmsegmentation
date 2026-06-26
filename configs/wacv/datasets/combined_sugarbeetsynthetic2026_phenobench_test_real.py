@@ -4,8 +4,8 @@ import os
 synthetic_dataset_type = 'SugarBeetSynthetic2026Dataset'
 real_dataset_type = 'PhenobenchDataset'
 
-data_root_synthetic = '/netscratch/naeem/sugarbeet_syn_v6/'
-data_root_real = '/netscratch/naeem/phenobench'
+data_root_synthetic = '/mnt/e/datasets/sugarbeet_syn_v6/'
+data_root_real = '/mnt/e/datasets/phenobench'
 
 batch_size = int(os.environ.get('TRAIN_BATCH_SIZE', 4))
 real_subset_ratio = float(os.environ.get('REAL_SUBSET_RATIO', 0.05))

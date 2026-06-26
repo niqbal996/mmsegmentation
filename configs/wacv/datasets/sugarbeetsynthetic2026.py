@@ -2,8 +2,8 @@
 synthetic_dataset_type = 'SugarBeetSynthetic2026Dataset'
 real_dataset_type = 'PhenobenchDatasetAL'
 
-synthetic_data_root = '/netscratch/naeem/sugarbeet_syn_v6/'
-real_data_root = '/netscratch/naeem/phenobench'
+synthetic_data_root = '/mnt/e/datasets/sugarbeet_syn_v6/'
+real_data_root = '/mnt/e/datasets/phenobench'
 # Define your dataset's classes and palette
 dataset_meta = dict(
     classes=('background', 'crop', 'weed'),
@@ -48,10 +48,9 @@ instance_evaluator = dict(
     class0_label=0,
     class1_label=1,
     class2_label=2,
-    instance_map_path='/netscratch/naeem/phenobench/val/plant_instances',
+    instance_map_path='/mnt/e/datasets/phenobench/val/plant_instances',
     instance_map_suffix='.png',
     instance_map_subdirs=('plant_instances', 'instance_segmentation'),
-    # vis_output_dir='/netscratch/naeem/mmseg_output/eccv_results/eccv_table/examples',
     # vis_fp_case_max=20,
     # vis_bg_alpha=0.35,
     pred_island_min_area=10,
@@ -100,7 +99,7 @@ test_dataloader = dict(
         type=real_dataset_type,
         data_root=real_data_root,
         subset_ratio=1.0,
-        sample_list='/netscratch/naeem/phenobench/phenobench_train_list.txt',
+        sample_list='/mnt/e/datasets/phenobench/phenobench_train_list.txt',
         data_prefix=dict(
             img_path='val/images',
             seg_map_path='val/semantics'),

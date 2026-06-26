@@ -2,7 +2,7 @@
 import os
 
 dataset_type = 'PhenobenchDataset'
-data_root = '/netscratch/naeem/phenobench'
+data_root = '/mnt/e/datasets/phenobench'
 
 batch_size = int(os.environ.get('TRAIN_BATCH_SIZE', 4))
 real_subset_ratio = float(os.environ.get('REAL_SUBSET_RATIO', 0.1))
