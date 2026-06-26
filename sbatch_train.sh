@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --mail-type=END
-#SBATCH --mail-user=naeem.iqbal@dfki.de
+#SBATCH --mail-user=user.user@user.de
 
 # This script takes two arguments:
 # 1. The config file path
@@ -36,8 +36,8 @@ echo "✅ Starting training job for config: $CONFIG_FILE"
 echo "✅ Output will be saved to: $WORK_DIR"
 
 srun \
-  --container-mounts=/netscratch/naeem:/netscratch/naeem,/home/iqbal/mmsegmentation:/home/iqbal/mmsegmentation,/ds/images/cropandweed:/ds/images/cropandweed,/home/iqbal/mmengine:/home/iqbal/mmengine,/home/iqbal/mmdetection:/home/iqbal/mmdetection \
-  --container-image=/netscratch/naeem/mmseg_23.09_09_2025_ADA.sqsh \
-  --container-workdir=/home/iqbal/mmsegmentation \
+  --container-mounts=/netscratch/user:/netscratch/user,/home/user/mmsegmentation:/home/user/mmsegmentation,/ds/images/cropandweed:/ds/images/cropandweed,/home/user/mmengine:/home/user/mmengine,/home/user/mmdetection:/home/user/mmdetection \
+  --container-image=/netscratch/user/mmseg_23.09_09_2025_ADA.sqsh \
+  --container-workdir=/home/user/mmsegmentation \
   --time=00-18:00 \
   bash -c "source ~/miniconda3/bin/activate && conda activate mmseg && python3 tools/train.py ${CONFIG_FILE} --work-dir ${WORK_DIR} --eval-after-training"
