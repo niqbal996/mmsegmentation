@@ -10,13 +10,14 @@ set -euo pipefail
 # User-edit section
 # ---------------------------------------------------------------------------
 CONFIG_DIR="configs/wacv"
-OUTPUT_ROOT="/netscratch/naeem/mmseg_output/wacv_results"
+OUTPUT_ROOT="/netscratch/naeem/mmseg_output/wacv_results_2"
 declare -a MIXED_REAL_SUBSET_RATIOS=(0.01 0.05 0.10)
-
+# declare -a MIXED_REAL_SUBSET_RATIOS=(0.05)
 # Provide only config filenames (or relative paths if you want to override).
 declare -a CONFIG_FILES=(
     # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench.py"
-    # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench_ohem_loss.py"
+    "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench_ohem_loss.py"
+    "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_phenobench_ohem_loss_subset.py"
     # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026.py"
     # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026_ohem_loss.py"
     # "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
@@ -24,22 +25,28 @@ declare -a CONFIG_FILES=(
     "deeplabv3plus_r50-d8_8xb1-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss_mixed.py"
     # "fcn_hr18_1xb4-30k_1024x1024_phenobench.py"
     # "fcn_hr18_1xb4-30k_1024x1024_phenobench_ohem_loss.py"
-    # "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026.py"
-    # "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
-    "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss.py"
-    "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss_mixed.py"
-    # "segformer_mit-b2_1xb2-30k_1024x1024_phenobench_vanilla.py"
+    # "fcn_hr18_1xb4-30k_1024x1024_phenobench_ohem_loss_subset.py"
+    # # "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026.py"
+    # # "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
+    # "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss.py"
+    # "fcn_hr18_1xb4-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss_mixed.py"
+    "segformer_mit-b2_1xb2-30k_1024x1024_phenobench_vanilla.py"
+    "segformer_mit-b2_1xb2-30k_1024x1024_phenobench_subset.py"
+    # "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026.py"
+    "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
+    "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_mixed.py"
     # "segformer_mit-b2_1xb2-30k_1024x1024_phenobench_ohem_loss.py"
-    # "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_vanilla.py"
-    # "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
-    "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss.py"
-    "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss_mixed.py"
+    # "segformer_mit-b2_1xb2-30k_1024x1024_phenobench_ohem_loss_subset.py"
+    # "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss.py"
+    # "segformer_mit-b2_1xb2-30k_1024x1024_sugarbeetsynthetic2026_and_phenobench_ohem_loss_mixed.py"
     # "mask2former_r50_1024x1024_phenobench.py"
-    # "mask2former_r50_1024x1024_sugarbeetsynthetic2026.py"
+    # "mask2former_r50_1024x1024_phenobench_subset.py"
+    # # # # # # "mask2former_r50_1024x1024_sugarbeetsynthetic2026.py"
     # "mask2former_r50_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
-    "mask2former_r50_1024x1024_sugarbeetsynthetic2026_and_phenobench_mixed.py"
-    # "mask2former_swin-t_1024x1024_phenobench.py"
-    # "mask2former_swin-t_1024x1024_sugarbeetsynthetic2026.py"
+    # "mask2former_r50_1024x1024_sugarbeetsynthetic2026_and_phenobench_mixed.py"
+    "mask2former_swin-t_1024x1024_phenobench.py"
+    "mask2former_swin-t_1024x1024_phenobench_subset.py"
+    # # # # # "mask2former_swin-t_1024x1024_sugarbeetsynthetic2026.py"
     "mask2former_swin-t_1024x1024_sugarbeetsynthetic2026_and_phenobench.py"
     "mask2former_swin-t_1024x1024_sugarbeetsynthetic2026_and_phenobench_mixed.py"
 )
@@ -189,6 +196,16 @@ is_mixed_config() {
     [[ "$stem" == *_mixed ]]
 }
 
+is_subset_config() {
+    local config_file="$1"
+    config_file="$(normalize_config_name "$config_file")"
+
+    local filename="${config_file##*/}"
+    local stem="${filename%.py}"
+
+    [[ "$stem" == *_subset ]]
+}
+
 real_subset_ratio_suffix() {
     local ratio="$1"
 
@@ -222,7 +239,7 @@ for config_item in "${CONFIG_FILES[@]}"; do
     fi
 
     declare -a real_subset_ratios=("")
-    if is_mixed_config "$config_item"; then
+    if is_mixed_config "$config_item" || is_subset_config "$config_item"; then
         real_subset_ratios=("${MIXED_REAL_SUBSET_RATIOS[@]}")
     fi
 

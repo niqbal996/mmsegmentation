@@ -54,8 +54,8 @@ train_dataloader = dict(
         subset_seed=42))
 
 val_dataloader = dict(
-    batch_size=6,
-    num_workers=4,
+    batch_size=2,
+    num_workers=1,
     persistent_workers=True,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
