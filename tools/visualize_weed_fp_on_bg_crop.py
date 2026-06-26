@@ -23,6 +23,7 @@ python tools/visualize_weed_fp_on_bg_crop.py \\
     --iop-thr 0.05 --min-area 10 --max-vis 500
 """
 import argparse
+import csv
 import os
 import os.path as osp
 from collections import defaultdict
@@ -363,23 +364,40 @@ def run_model(model, data: dict, gt_np: np.ndarray) -> np.ndarray:
 
 def render_full_panels(rgb: np.ndarray, gt_np: np.ndarray, pred_np: np.ndarray,
                        analysis: dict, c0: int, c1: int, c2: int,
-                       ignore_index: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                       ignore_index: int,
+                       clean: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     h, w = gt_np.shape
     panel_rgb  = np.array(Image.fromarray(rgb).resize((w, h), Image.BILINEAR), dtype=np.uint8)
     panel_gt   = _render_gt_mask(gt_np, c0, c1, c2, ignore_index)
     panel_pred = _render_pred_mask(pred_np, c0, c1, c2)
 
-    for rec in analysis['components']:
-        if rec['is_tp']:
-            panel_pred = _draw_contour(panel_pred, rec['mask'], _PALETTE['tp_weed'])
-        elif rec['is_fp']:
-            col = _PALETTE.get(rec['category'], _PALETTE['fp_bg'])
-            panel_pred = _fill_overlay(panel_pred, rec['mask'], col, alpha=0.5)
-            panel_pred = _draw_contour(panel_pred, rec['mask'], col)
-    for fn in analysis['fn_masks']:
-        panel_pred = _draw_contour(panel_pred, fn['mask'], _PALETTE['fn_weed'])
+    if not clean:
+        for rec in analysis['components']:
+            if rec['is_tp']:
+                panel_pred = _draw_contour(panel_pred, rec['mask'], _PALETTE['tp_weed'])
+            elif rec['is_fp']:
+                col = _PALETTE.get(rec['category'], _PALETTE['fp_bg'])
+                panel_pred = _fill_overlay(panel_pred, rec['mask'], col, alpha=0.5)
+                panel_pred = _draw_contour(panel_pred, rec['mask'], col)
+        for fn in analysis['fn_masks']:
+            panel_pred = _draw_contour(panel_pred, fn['mask'], _PALETTE['fn_weed'])
 
     return panel_rgb, panel_gt, panel_pred
+
+
+# ---------------------------------------------------------------------------
+# Output resizing helper
+# ---------------------------------------------------------------------------
+
+def _resize_to(img: np.ndarray,
+               paper_size: Optional[Tuple[int, int]]) -> np.ndarray:
+    """Resize to paper_size=(W, H). Identity when paper_size is None."""
+    if paper_size is None:
+        return img
+    out_w, out_h = paper_size
+    return np.asarray(
+        Image.fromarray(img).resize((out_w, out_h), Image.LANCZOS),
+        dtype=np.uint8)
 
 
 # ---------------------------------------------------------------------------
@@ -387,9 +405,16 @@ def render_full_panels(rgb: np.ndarray, gt_np: np.ndarray, pred_np: np.ndarray,
 # ---------------------------------------------------------------------------
 
 def compose_single_vis(rgb, gt_np, pred_np, analysis, c0, c1, c2,
-                       ignore_index, iop_thr, iog_thr) -> np.ndarray:
+                       ignore_index, iop_thr, iog_thr,
+                       clean: bool = False) -> np.ndarray:
     h, w = gt_np.shape
-    pr, pg, pp = render_full_panels(rgb, gt_np, pred_np, analysis, c0, c1, c2, ignore_index)
+    pr, pg, pp = render_full_panels(rgb, gt_np, pred_np, analysis,
+                                    c0, c1, c2, ignore_index, clean=clean)
+
+    if clean:
+        sep = np.full((h, 2, 3), 255, dtype=np.uint8)
+        return np.concatenate([pr, sep, pg, sep, pp], axis=1)
+
     canvas = np.concatenate([pr, pg, pp], axis=1)
     pil    = Image.fromarray(canvas)
     draw   = ImageDraw.Draw(pil)
@@ -435,6 +460,30 @@ def compute_crop_bbox(mask: np.ndarray, h: int, w: int,
     x1, x2 = int(xs.min()), int(xs.max())
     pad = max(min_pad, int(max(y2 - y1 + 1, x2 - x1 + 1) * pad_factor))
     return max(0, y1 - pad), max(0, x1 - pad), min(h, y2 + pad + 1), min(w, x2 + pad + 1)
+
+
+def compute_fixed_crop_bbox(mask: np.ndarray, h: int, w: int,
+                             crop_h: int, crop_w: int) -> Tuple[int, int, int, int]:
+    """Fixed crop_h × crop_w window centered on the mask centroid.
+
+    The window is shifted (not scaled) to stay within image bounds, so the
+    output is always exactly crop_h × crop_w unless the image itself is
+    smaller than the requested window.
+    """
+    ys, xs = np.where(mask)
+    cy = int(round(ys.mean())) if ys.size > 0 else h // 2
+    cx = int(round(xs.mean())) if xs.size > 0 else w // 2
+
+    y1, y2 = cy - crop_h // 2, cy - crop_h // 2 + crop_h
+    x1, x2 = cx - crop_w // 2, cx - crop_w // 2 + crop_w
+
+    # Shift to stay inside image without changing window size
+    if y1 < 0:   y2 -= y1;      y1 = 0
+    if x1 < 0:   x2 -= x1;      x1 = 0
+    if y2 > h:   y1 -= y2 - h;  y2 = h
+    if x2 > w:   x1 -= x2 - w;  x2 = w
+
+    return max(0, y1), max(0, x1), min(h, y2), min(w, x2)
 
 
 def _c(arr: np.ndarray, cy1, cx1, cy2, cx2) -> np.ndarray:
@@ -524,11 +573,26 @@ def compose_comparison_crop(rgb, gt_np, pred1_np, analysis1,
                              cy1, cx1, cy2, cx2,
                              c0, c1, c2, ignore_index,
                              name1, name2, fp_inst,
-                             iop_thr, iog_thr) -> np.ndarray:
-    """2-row × 3-col crop comparison image with per-row info sidebar."""
-    pr, pg, pp1 = render_full_panels(rgb, gt_np, pred1_np, analysis1, c0, c1, c2, ignore_index)
-    _,   _,  pp2 = render_full_panels(rgb, gt_np, pred2_np, analysis2, c0, c1, c2, ignore_index)
+                             iop_thr, iog_thr,
+                             clean: bool = False) -> np.ndarray:
+    """Annotated: 2-row × 3-col.  Clean: single row — RGB | GT | M1 | M2."""
+    pr, pg, pp1 = render_full_panels(rgb, gt_np, pred1_np, analysis1,
+                                     c0, c1, c2, ignore_index, clean=clean)
+    _,   _,  pp2 = render_full_panels(rgb, gt_np, pred2_np, analysis2,
+                                      c0, c1, c2, ignore_index, clean=clean)
     cw, ch = cx2 - cx1, cy2 - cy1
+
+    # ── Clean: single row, 4 panels, no annotations ────────────────────────
+    if clean:
+        sep = np.full((ch, 2, 3), 255, dtype=np.uint8)
+        return np.concatenate([
+            _c(pr,  cy1, cx1, cy2, cx2), sep,
+            _c(pg,  cy1, cx1, cy2, cx2), sep,
+            _c(pp1, cy1, cx1, cy2, cx2), sep,
+            _c(pp2, cy1, cx1, cy2, cx2),
+        ], axis=1)
+
+    # ── Annotated: 2-row × 3-col with sidebars ─────────────────────────────
     W = cw * 3
 
     def _build_row(pp, analysis, hdr_text, hdr_color):
@@ -608,6 +672,16 @@ def parse_args():
     p.add_argument('--class1-label', type=int,   default=None)
     p.add_argument('--class2-label', type=int,   default=None)
     p.add_argument('--ignore-index', type=int,   default=255)
+    p.add_argument('--clean',        action='store_true',
+                   help='Panels only — no text, sidebars or footer (for paper figures)')
+    p.add_argument('--fixed-crop',   type=int, default=None,
+                   help='Fixed square crop window N×N px centered on each FP instance '
+                        'centroid. All outputs are the same pixel size with no stretching. '
+                        'Recommended for small instances (e.g. --fixed-crop 200). '
+                        'Overrides --pad-factor / --min-pad.')
+    p.add_argument('--paper-size',   default=None,
+                   help='Resize every output to WxH, e.g. 900x300 (stretches — use '
+                        '--fixed-crop instead for uniform sizes without distortion)')
     return p.parse_args()
 
 
@@ -663,7 +737,24 @@ def main():
     else:
         print('Single-model mode.')
 
+    paper_size: Optional[Tuple[int, int]] = None
+    if args.paper_size:
+        pw, ph = args.paper_size.lower().split('x')
+        paper_size = (int(pw), int(ph))
+        print(f'Output size: {paper_size[0]}×{paper_size[1]} px  '
+              f'({"clean" if args.clean else "annotated"})')
+    elif args.clean:
+        print('Clean mode (no annotations, natural crop size).')
+
     saved = 0
+    _csv_f = _csv_w = None
+    if args.clean:
+        _csv_path = osp.join(args.output_dir, 'crop_sizes.csv')
+        _csv_f    = open(_csv_path, 'w', newline='')
+        _csv_w    = csv.writer(_csv_f)
+        _csv_w.writerow(['filename', 'crop_h_px', 'crop_w_px',
+                         'caption_hint'])
+        print(f'Crop sizes → {_csv_path}')
 
     for idx in range(len(dataset)):
         if saved >= args.max_vis:
@@ -688,7 +779,9 @@ def main():
 
             rgb = load_rgb(img_path, target_shape=(h, w))
             vis = compose_single_vis(rgb, gt_np, pred1, an1, c0, c1, c2,
-                                     ignore_index, args.iop_thr, args.iog_thr)
+                                     ignore_index, args.iop_thr, args.iog_thr,
+                                     clean=args.clean)
+            vis = _resize_to(vis, paper_size)
             stem = osp.splitext(osp.basename(img_path))[0]
             out  = osp.join(args.output_dir,
                             f'{saved+1:04d}_{stem}'
@@ -696,6 +789,9 @@ def main():
                             f'_fpcrop{an1["fp_crop_count"]}'
                             f'_fn{len(an1["fn_masks"])}.png')
             Image.fromarray(vis).save(out)
+            if _csv_w is not None:
+                _csv_w.writerow([osp.basename(out), h, w,
+                                 f'full image {w}×{h} px'])
             saved += 1
             print(f'[{idx:04d}] {saved} → {osp.basename(out)}')
             continue
@@ -721,22 +817,36 @@ def main():
         for fp in fp_instances:
             if saved >= args.max_vis:
                 break
-            cy1, cx1, cy2, cx2 = compute_crop_bbox(
-                fp['mask'], h, w, args.pad_factor, args.min_pad)
+            if args.fixed_crop:
+                cy1, cx1, cy2, cx2 = compute_fixed_crop_bbox(
+                    fp['mask'], h, w, args.fixed_crop, args.fixed_crop)
+            else:
+                cy1, cx1, cy2, cx2 = compute_crop_bbox(
+                    fp['mask'], h, w, args.pad_factor, args.min_pad)
             vis = compose_comparison_crop(
                 rgb, gt_np, pred1, an1, pred2, an2,
                 cy1, cx1, cy2, cx2,
                 c0, c1, c2, ignore_index,
-                name1, name2, fp, args.iop_thr, args.iog_thr)
+                name1, name2, fp, args.iop_thr, args.iog_thr,
+                clean=args.clean)
+            if not args.fixed_crop:
+                vis = _resize_to(vis, paper_size)
             out = osp.join(args.output_dir,
                            f'{saved+1:04d}_{stem}'
                            f'_src{fp["source"]}'
                            f'_{fp["category"]}'
                            f'_a{fp["area"]}.png')
             Image.fromarray(vis).save(out)
+            if _csv_w is not None:
+                ch_px, cw_px = cy2 - cy1, cx2 - cx1
+                fixed = f' (fixed {args.fixed_crop}px window)' if args.fixed_crop else ''
+                _csv_w.writerow([osp.basename(out), ch_px, cw_px,
+                                 f'crop {cw_px}×{ch_px} px{fixed}'])
             saved += 1
             print(f'  [{idx:04d}] {saved}: {osp.basename(out)}')
 
+    if _csv_f is not None:
+        _csv_f.close()
     print(f'\nDone. {saved} images saved to {args.output_dir}')
 
 

@@ -106,7 +106,7 @@ def main():
         runner = RUNNERS.build(cfg)
 
     # start training
-    runner.train()
+    # runner.train()
 
     # test the best checkpoint after training
     if args.eval_after_training:
@@ -114,7 +114,7 @@ def main():
         # current work directory.
         best_ckpt_path = None
         for filename in os.listdir(runner.work_dir):
-            if filename.startswith('best_mIoU_iter_') and filename.endswith('.pth'):
+            if filename.startswith('best_IoU_weed_iter_') and filename.endswith('.pth'):
                 best_ckpt_path = osp.join(runner.work_dir, filename)
                 break
         

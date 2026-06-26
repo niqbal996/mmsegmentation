@@ -8,7 +8,7 @@ from mmengine.model import BaseModule
 
 try:
     from mmdet.models.dense_heads import \
-        Mask2FormerHeadADA as MMDET_Mask2FormerHead
+        Mask2FormerHead as MMDET_Mask2FormerHead
     from mmdet.models.utils import multi_apply
 except ModuleNotFoundError:
     MMDET_Mask2FormerHead = BaseModule
